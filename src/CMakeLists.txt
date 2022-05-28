@@ -29,7 +29,7 @@ set(OpenGL_GL_PREFERENCE "GLVND")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_FLAGS_DEBUG "-g -ggdb -pg -fsanitize=undefined -Werror -Wall")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -ggdb -pg -fsanitize=undefined -Wall")
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 
 #########################################################################################
@@ -52,7 +52,7 @@ find_package(Threads REQUIRED)
 # Main target binary
 add_executable(game)
 target_sources(game PRIVATE
-  exemplo_01.c
+  exemplo_03.cpp
 )
 target_link_libraries(game PRIVATE
   GLEW::glew
