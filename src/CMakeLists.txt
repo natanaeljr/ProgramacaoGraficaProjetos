@@ -52,7 +52,7 @@ find_package(Threads REQUIRED)
 # Main target binary
 add_executable(game)
 target_sources(game PRIVATE
-  exemplo_03.cpp
+  color_game.cpp
 )
 target_link_libraries(game PRIVATE
   GLEW::glew

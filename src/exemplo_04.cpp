@@ -83,7 +83,6 @@ int main() {
     glfwWindowHint(GLFW_RESIZABLE, GL_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 4);
     
-#pragma region Basic Setup
     GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "ORTHO + MOUSE + TEXTURE", nullptr, nullptr);
     
     
@@ -102,7 +101,6 @@ int main() {
         return EXIT_FAILURE;
     }
     
-#pragma endregion
     
     const char* vertex_shader =
         "#version 410\n"
@@ -180,12 +178,10 @@ int main() {
             mouse(mx, my);
         }
 
-#pragma region Input Handling
         
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
-#pragma endregion
         
         glClearColor(0.8f, 0.8f, 0.8f, 1.0f);
         glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
