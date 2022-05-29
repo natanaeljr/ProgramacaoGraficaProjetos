@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(M1 LANGUAGES C CXX)
+project(ProgGraf LANGUAGES C CXX)
 
 # This project can be built as a standalone project on a system with the required
 # libraries already installed, or it can be part of the Super-Project which builds all
