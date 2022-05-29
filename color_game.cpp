@@ -14,9 +14,14 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/ext/quaternion_transform.hpp>
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constants
+
 constexpr int WIDTH = 800, HEIGHT = 480;
 constexpr int COLS = 10, ROWS = 15;
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Shader
 
 /// Compile and link shader program
 int build_shader_program()
@@ -55,12 +60,15 @@ void main(){
     return sp;
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// GLObject
+
 /// Vertex data
 struct Vertex {
     glm::vec3 pos;
 };
 
-/// Represents data of an object upload to GPU
+/// Represents data of an object in GPU memory
 struct GLObject {
     GLuint vao;
     GLuint vbo;
@@ -92,6 +100,39 @@ static constexpr Vertex kQuadVertices[] = {
     {.pos = { +1.0f, +1.0f, +0.0f }},
 };
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Components
+
+/// RGB Unit
+struct Rgb {
+    union {
+        struct {
+            float r;
+            float g;
+            float b;
+        };
+        glm::vec3 vec;
+    };
+};
+
+/// Color Palette
+struct Palette {
+    Rgb matrix[ROWS][COLS];
+
+    /// Create new Palette of random colors
+    static Palette create_random() {
+        Palette palette;
+        for (int i = 0; i < ROWS; i++) {
+            for (int j = 0; j < COLS; j++) {
+                palette.matrix[i][j].r = (std::rand() % 255) / 255.f;
+                palette.matrix[i][j].g = (std::rand() % 255) / 255.f;
+                palette.matrix[i][j].b = (std::rand() % 255) / 255.f;
+            }
+        }
+        return palette;
+    }
+};
+
 /// Transform component
 struct Transform {
   glm::vec3 position {0.0f};
@@ -112,34 +153,8 @@ struct GameObject {
     Transform transform;
 };
 
-/// RGB Unit
-struct Rgb {
-    union {
-        struct {
-            float r;
-            float g;
-            float b;
-        };
-        glm::vec3 vec;
-    };
-};
-
-/// Color Palette
-struct Palette {
-    Rgb matrix[ROWS][COLS];
-
-    static Palette random() {
-        Palette palette;
-        for (int i = 0; i < ROWS; i++) {
-            for (int j = 0; j < COLS; j++) {
-                palette.matrix[i][j].r = (std::rand() % 255) / 255.f;
-                palette.matrix[i][j].g = (std::rand() % 255) / 255.f;
-                palette.matrix[i][j].b = (std::rand() % 255) / 255.f;
-            }
-        }
-        return palette;
-    }
-};
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Game
 
 /// Game & Engine data
 struct Game {
@@ -160,12 +175,12 @@ int game_init(Game& game, GLFWwindow* window)
     game.projection = glm::mat4(1.0f);
     game.quad.glo = create_gl_object(kQuadVertices, sizeof(kQuadVertices) / sizeof(Vertex)),
     game.quad.transform = Transform{};
-    game.palette = Palette::random();
+    game.palette = Palette::create_random();
     return 0;
 }
 
 /// Render Game scene
-void game_render(Game& game, float dt)
+void game_render(Game& game)
 {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -180,7 +195,6 @@ void game_render(Game& game, float dt)
         for (int j = 0; j < COLS; j++) {
             Rgb color = game.palette.matrix[i][j];
             Transform transform{};
-            transform.scale = glm::vec3(0.5f);
             transform.position.x = (-1.0f + normal_tile_size.x / 2.0f) + (j * normal_tile_size.x);
             transform.position.y = (+1.0f - normal_tile_size.y / 2.0f) - (i * normal_tile_size.y);
             transform.scale.x = 0.85f / COLS;
@@ -202,14 +216,16 @@ int game_loop(GLFWwindow* window)
     if (ret) return ret;
     glfwSetWindowUserPointer(window, &game);
     while (!glfwWindowShouldClose(window)) {
-        float dt = glfwGetTime();
         glfwPollEvents();
-        game_render(game, dt);
+        game_render(game);
         glfwSwapBuffers(window);
     }
     glfwSetWindowUserPointer(window, NULL);
     return 0;
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Events
 
 /// Handle Key input event
 void key_event_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -227,6 +243,9 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
     game->winsize.x = height;
     glViewport(0, 0, width, height);
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Setup
 
 /// Create window with GLFW
 int create_window(GLFWwindow*& window)
@@ -263,10 +282,12 @@ int load_opengl()
     return 0;
 }
 
-/// Program Entrance
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Main
+
 int main()
 {
-    int ret = 0;
+    int ret;
 
     // Create Window ==========================================================
     GLFWwindow* window;
