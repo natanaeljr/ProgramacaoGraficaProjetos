@@ -1,8 +1,13 @@
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <stdio.h>
 #include <stdlib.h>
 #include <array>
+#include <ctime>
+#include <vector>
+#include <optional>
+#include <algorithm>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -17,8 +22,10 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constants
 
-constexpr int WIDTH = 800, HEIGHT = 480;
-constexpr int COLS = 10, ROWS = 15;
+constexpr int WIDTH = 800, HEIGHT = 480; // window size
+constexpr int COLS = 15, ROWS = 20;      // palette size
+constexpr float TOLERANCE = 0.17;        // % (0 - 1)
+constexpr int PICKING_COUNT = 5;         // color matching attempts
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Shader
@@ -58,7 +65,7 @@ void main(){
     glAttachShader(sp, vs);
     glLinkProgram(sp);
     return sp;
-}
+    }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// GLObject
@@ -118,10 +125,13 @@ struct Rgb {
 /// Color Palette
 struct Palette {
     Rgb matrix[ROWS][COLS];
+    std::optional<glm::uvec2> target_index = std::nullopt;
+    std::vector<glm::uvec2> match_indices;
 
     /// Create new Palette of random colors
     static Palette create_random() {
         Palette palette;
+        std::srand(std::time(nullptr));
         for (int i = 0; i < ROWS; i++) {
             for (int j = 0; j < COLS; j++) {
                 palette.matrix[i][j].r = (std::rand() % 255) / 255.f;
@@ -135,22 +145,28 @@ struct Palette {
 
 /// Transform component
 struct Transform {
-  glm::vec3 position {0.0f};
-  glm::vec3 scale    {1.0f};
-  glm::quat rotation {1.0f, glm::vec3(0.0f)};
+    glm::vec3 position {0.0f};
+    glm::vec3 scale    {1.0f};
+    glm::quat rotation {1.0f, glm::vec3(0.0f)};
 
-  glm::mat4 matrix() {
-      glm::mat4 translation_mat = glm::translate(glm::mat4(1.0f), position);
-      glm::mat4 rotation_mat = glm::toMat4(rotation);
-      glm::mat4 scale_mat = glm::scale(glm::mat4(1.0f), scale);
-      return translation_mat * rotation_mat * scale_mat;
-  }
+    glm::mat4 matrix() {
+        glm::mat4 translation_mat = glm::translate(glm::mat4(1.0f), position);
+        glm::mat4 rotation_mat = glm::toMat4(rotation);
+        glm::mat4 scale_mat = glm::scale(glm::mat4(1.0f), scale);
+        return translation_mat * rotation_mat * scale_mat;
+    }
 };
 
 /// Game Object represents an Entity's data
 struct GameObject {
     GLObject glo;
     Transform transform;
+};
+
+/// Game states of FSM
+enum class GameState {
+    PICK_TARGET_COLOR,
+    MATCH_COLORS,
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -164,6 +180,8 @@ struct Game {
     glm::mat4 projection;
     GameObject quad;
     Palette palette;
+    GameState state;
+    size_t pick_match_count;
 };
 
 /// Initialize Game
@@ -176,6 +194,16 @@ int game_init(Game& game, GLFWwindow* window)
     game.quad.glo = create_gl_object(kQuadVertices, sizeof(kQuadVertices) / sizeof(Vertex)),
     game.quad.transform = Transform{};
     game.palette = Palette::create_random();
+    game.state = GameState::PICK_TARGET_COLOR;
+    game.pick_match_count = 0;
+
+    printf("THE COLOR PICKING GAME\n"
+           "Settings:\n"
+           "- cols: %d, rows: %d\n"
+           "- match tolerance: %.2f\n"
+           "- color picking count: %d\n\n",
+           COLS, ROWS, TOLERANCE, PICKING_COUNT);
+
     return 0;
 }
 
@@ -225,6 +253,95 @@ int game_loop(GLFWwindow* window)
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Logic
+
+/// Calculate the maximum distance of RGB vector
+float max_rgb_distance() {
+    return std::sqrt(std::pow(255, 2) + std::pow(255, 2) + std::pow(255, 2)) / 255.f;
+}
+
+/// Calculate the distance between two RGBs
+float rgb_distance(Rgb c, Rgb o)
+{
+    return std::sqrt(std::pow(c.b - o.b, 2) + std::pow(c.b - o.b, 2) + std::pow(c.b - o.b, 2));
+}
+
+/// Check if match color is similar to target color
+auto check_color_match(Game& game, glm::uvec2 match) -> std::pair<bool, float>
+{
+    glm::uvec2 target = *game.palette.target_index;
+    Rgb target_color = game.palette.matrix[target.y][target.x];
+    Rgb match_color = game.palette.matrix[match.y][match.x];
+    float distance = rgb_distance(target_color, match_color);
+    bool is_similar = distance <= (TOLERANCE * max_rgb_distance());
+    return {is_similar, distance};
+}
+
+/// Convert cursor position to tile index
+auto cursor_to_tile_index(Game& game, glm::vec2 cursor) -> std::pair<int, int>
+{
+    const auto palette_size = glm::vec2{COLS, ROWS};
+    const auto tile_size = glm::vec2(game.winsize) / palette_size;
+    int row = cursor.y / tile_size.y;
+    int col = cursor.x / tile_size.x;
+    return {row, col};
+}
+
+/// Pick the target color in the palette from cursor position
+void pick_target_color(Game& game, glm::vec2 cursor)
+{
+    auto [row, col] = cursor_to_tile_index(game, cursor);
+    Rgb color = game.palette.matrix[row][col];
+    printf("Picked color RGB{%3d,%3d,%3d} @ row: %d, col: %d\n", (int)(color.r * 255), (int)(color.g * 255), (int)(color.b * 255), row, col);
+    printf(">> TARGET defined\n");
+    game.palette.target_index = {col, row};
+}
+
+/// Pick the match color to be compared against target color for the similarity
+void pick_match_color(Game& game, glm::vec2 cursor)
+{
+    auto [row, col] = cursor_to_tile_index(game, cursor);
+    Rgb color = game.palette.matrix[row][col];
+    printf("Picked color RGB{%3d,%3d,%3d} @ row: %d, col: %d\n", (int)(color.r * 255), (int)(color.g * 255), (int)(color.b * 255), row, col);
+
+    auto it = std::find(game.palette.match_indices.begin(), game.palette.match_indices.end(), glm::uvec2(col, row));
+    if (it != game.palette.match_indices.end() || game.palette.target_index == glm::uvec2(col, row)) {
+        printf("Color already picked!\n");
+    }
+    else if (auto [match, distance] = check_color_match(game, {col, row}); match) {
+        printf(">> MATCH -> distance: %.2f\n", distance * 255);
+        game.palette.match_indices.push_back(glm::uvec2(col, row));
+        game.pick_match_count++;
+    }
+    else {
+        printf(">> TOO FAR -> distance: %.2f\n", distance * 255);
+        game.pick_match_count++;
+    }
+}
+
+/// Prints the game score
+void print_score(Game& game)
+{
+    printf("Score: %02zu/%02zu\n", game.palette.match_indices.size(), game.pick_match_count);
+}
+
+/// Play the color picking logic
+void play_color_picking(Game& game, glm::vec2 cursor)
+{
+    if (game.state == GameState::PICK_TARGET_COLOR) {
+        pick_target_color(game, cursor);
+        game.state = GameState::MATCH_COLORS;
+    }
+    else if (game.state == GameState::MATCH_COLORS) {
+        pick_match_color(game, cursor);
+        if (game.pick_match_count >= PICKING_COUNT) {
+            print_score(game);
+            glfwSetWindowShouldClose(game.window, 1);
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Events
 
 /// Handle Key input event
@@ -232,6 +349,19 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
 {
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
+}
+
+/// Handle Mouse click events
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+{
+    auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
+    if (!game) return;
+
+    if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
+        double mx, my;
+        glfwGetCursorPos(window, &mx, &my);
+        play_color_picking(*game, {(float)mx, (float)my});
+    }
 }
 
 /// Handle Window framebuffer resize event
@@ -265,6 +395,7 @@ int create_window(GLFWwindow*& window)
     }
     glfwMakeContextCurrent(window);
     glfwSetKeyCallback(window, key_event_callback);
+    glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetWindowAspectRatio(window, WIDTH, HEIGHT);
     glfwSwapInterval(1); // vsync
