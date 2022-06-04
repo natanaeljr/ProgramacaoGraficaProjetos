@@ -125,6 +125,7 @@ struct Rgb {
 /// Color Palette
 struct Palette {
     Rgb matrix[ROWS][COLS];
+    bool hidden[ROWS][COLS];
     std::optional<glm::uvec2> target_index = std::nullopt;
     std::vector<glm::uvec2> match_indices;
 
@@ -137,6 +138,7 @@ struct Palette {
                 palette.matrix[i][j].r = (std::rand() % 255) / 255.f;
                 palette.matrix[i][j].g = (std::rand() % 255) / 255.f;
                 palette.matrix[i][j].b = (std::rand() % 255) / 255.f;
+                palette.hidden[i][j] = false;
             }
         }
         return palette;
@@ -167,6 +169,7 @@ struct GameObject {
 enum class GameState {
     PICK_TARGET_COLOR,
     MATCH_COLORS,
+    END,
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -221,6 +224,7 @@ void game_render(Game& game)
     const auto normal_tile_size = clip_size / palette_size;
     for (int i = 0; i < ROWS; i++) {
         for (int j = 0; j < COLS; j++) {
+            if (game.palette.hidden[i][j]) continue;
             Rgb color = game.palette.matrix[i][j];
             Transform transform{};
             transform.position.x = (-1.0f + normal_tile_size.x / 2.0f) + (j * normal_tile_size.x);
@@ -305,12 +309,16 @@ void pick_match_color(Game& game, glm::vec2 cursor)
     printf("Picked color RGB{%3d,%3d,%3d} @ row: %d, col: %d\n", (int)(color.r * 255), (int)(color.g * 255), (int)(color.b * 255), row, col);
 
     auto it = std::find(game.palette.match_indices.begin(), game.palette.match_indices.end(), glm::uvec2(col, row));
-    if (it != game.palette.match_indices.end() || game.palette.target_index == glm::uvec2(col, row)) {
+    if (it != game.palette.match_indices.end()) {
         printf("Color already picked!\n");
+    }
+    else if (game.palette.target_index == glm::uvec2(col, row)) {
+        printf("This is the TARGET color!");
     }
     else if (auto [match, distance] = check_color_match(game, {col, row}); match) {
         printf(">> MATCH -> distance: %.2f\n", distance * 255);
         game.palette.match_indices.push_back(glm::uvec2(col, row));
+        game.palette.hidden[row][col] = true;
         game.pick_match_count++;
     }
     else {
@@ -336,7 +344,7 @@ void play_color_picking(Game& game, glm::vec2 cursor)
         pick_match_color(game, cursor);
         if (game.pick_match_count >= PICKING_COUNT) {
             print_score(game);
-            glfwSetWindowShouldClose(game.window, 1);
+            game.state = GameState::END;
         }
     }
 }
@@ -349,6 +357,8 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
 {
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+        glfwSetWindowShouldClose(game->window, 1);
 }
 
 /// Handle Mouse click events
