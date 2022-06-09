@@ -52,7 +52,8 @@ find_package(Threads REQUIRED)
 # Main target binary
 add_executable(game)
 target_sources(game PRIVATE
-  color_game.cpp
+  anaglifo.cpp
+  stb_image.cpp
 )
 target_link_libraries(game PRIVATE
   GLEW::glew
@@ -63,4 +64,5 @@ target_link_libraries(game PRIVATE
 )
 target_compile_definitions(game PRIVATE
   GLFW_INCLUDE_NONE
+  ASSETS_PATH="${CMAKE_CURRENT_SOURCE_DIR}"
 )
