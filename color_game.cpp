@@ -207,6 +207,8 @@ int game_init(Game& game, GLFWwindow* window)
            "- color picking count: %d\n\n",
            COLS, ROWS, TOLERANCE, PICKING_COUNT);
 
+    printf("Pick the target color\n");
+
     return 0;
 }
 
@@ -253,6 +255,18 @@ int game_loop(GLFWwindow* window)
         glfwSwapBuffers(window);
     }
     glfwSetWindowUserPointer(window, NULL);
+    return 0;
+}
+
+/// Restart the game
+int game_restart(Game& game)
+{
+    game.palette = Palette::create_random();
+    game.state = GameState::PICK_TARGET_COLOR;
+    game.pick_match_count = 0;
+
+    printf("\n== RESTART ==\n");
+    printf("Pick the target color\n");
     return 0;
 }
 
@@ -357,8 +371,12 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
 {
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
-    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+    if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+        game_restart(*game);
+    }
+    else if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(game->window, 1);
+    }
 }
 
 /// Handle Mouse click events
