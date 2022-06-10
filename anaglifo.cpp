@@ -153,7 +153,7 @@ auto load_rgba_texture(const std::string& inpath) -> std::optional<GLuint>
     int width, height, channels;
     unsigned char* data = stbi_load(filepath.data(), &width, &height, &channels, 0);
     if (!data) {
-        fprintf(stderr, "Failed to load texture path (%s)", filepath.data());
+        fprintf(stderr, "Failed to load texture path (%s)\n", filepath.data());
         return std::nullopt;
     }
     GLenum type = (channels == 4) ? GL_RGBA : GL_RGB;
@@ -215,6 +215,17 @@ struct Engine {
     AnaglifoFormula anaglifo_formula;
 };
 
+/// Get texture file paths from user input
+auto read_user_texture_input() -> std::tuple<std::string, std::string>
+{
+    std::string left, right;
+    std::cout << "Digite o caminho da imagem esquerda: ";
+    std::cin >> left;
+    std::cout << "Digite o caminho da imagem direita: ";
+    std::cin >> right;
+    return {left, right};
+}
+
 /// Initialize Engine
 int engine_init(Engine& engine, GLFWwindow* window)
 {
@@ -225,8 +236,10 @@ int engine_init(Engine& engine, GLFWwindow* window)
     engine.quad.glo = create_gl_object(kQuadVertices, sizeof(kQuadVertices) / sizeof(Vertex)),
     engine.quad.transform = Transform{};
     engine.quad.transform.scale.y = -1.0f; // flip image
-    engine.left_texture = *load_rgba_texture("aLeft.png");
-    engine.right_texture = *load_rgba_texture("aRight.png");
+
+    auto [left_path, right_path] = read_user_texture_input();
+    engine.left_texture = *load_rgba_texture(left_path);
+    engine.right_texture = *load_rgba_texture(right_path);
     engine.anaglifo_formula = AnaglifoFormula::COLOR;
 
     return 0;
