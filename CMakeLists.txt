@@ -52,7 +52,7 @@ find_package(Threads REQUIRED)
 # Main target binary
 add_executable(game)
 target_sources(game PRIVATE
-  anaglifo.cpp
+  supermario.cpp
   stb_image.cpp
 )
 target_link_libraries(game PRIVATE
