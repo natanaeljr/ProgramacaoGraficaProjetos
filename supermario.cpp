@@ -25,9 +25,9 @@
 using namespace std::string_literals;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-/// Constants
+/// Settings
 
-constexpr int WIDTH = 1280, HEIGHT = 720; // window size
+constexpr int WIDTH = 900, HEIGHT = 500; // window size
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Shader
@@ -89,6 +89,9 @@ struct GLObject {
     size_t count;
 };
 
+/// GLObject reference type alias
+using GLObjectRef = std::shared_ptr<GLObject>;
+
 /// Create an Object in GPU memory
 GLObject create_gl_object(const Vertex vertices[], const size_t count)
 {
@@ -119,11 +122,17 @@ static constexpr Vertex kQuadVertices[] = {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Textures
 
+/// GLTexture type alias
+using GLTexture = GLuint;
+/// GLObject reference type alias
+using GLTextureRef = std::shared_ptr<GLTexture>;
+
 /// Read file and upload RGB/RBGA texture to GPU memory
-auto load_rgba_texture(const std::string& inpath) -> std::optional<GLuint>
+auto load_rgba_texture(const std::string& inpath) -> std::optional<GLTexture>
 {
     const std::string filepath = ASSETS_PATH + "/"s + inpath;
     int width, height, channels;
+    stbi_set_flip_vertically_on_load(true);
     unsigned char* data = stbi_load(filepath.data(), &width, &height, &channels, 0);
     if (!data) {
         fprintf(stderr, "Failed to load texture path (%s)\n", filepath.data());
@@ -160,14 +169,37 @@ struct Transform {
     }
 };
 
-/// Game Object represents an Entity's data
-struct GameObject {
-    GLObject glo;
-    Transform transform;
+/// Motion component
+struct Motion {
+  glm::vec3 velocity     {0.0f};
+  glm::vec3 acceleration {0.0f};
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Game
+
+/// Game Object represents an Entity's data
+struct GameObject {
+    GLObjectRef glo;
+    Transform transform;
+    Motion motion;
+    GLTextureRef texture;
+};
+
+/// Lists of all Game Objects in a Scene, divised in layers, in order of render
+struct ObjectLists {
+  std::vector<GameObject> background;
+  std::vector<GameObject> platform;
+  std::vector<GameObject> entity;
+  /// Get all layers of objects
+  auto all_lists() { return std::array{ &background, &platform, &entity }; }
+};
+
+/// Generic Scene structure
+struct Scene {
+  ObjectLists objects;
+  glm::vec4 bg_color;
+};
 
 /// All Game data
 struct Game {
@@ -175,11 +207,38 @@ struct Game {
     glm::uvec2 winsize;
     int shader_program;
     glm::mat4 projection;
-    GameObject quad;
-    GLuint bg_texture0;
-    GLuint bg_texture1;
-    GLuint bg_texture2;
+    GLObjectRef quad_glo;
+    std::optional<Scene> scene;
 };
+
+/// Load Main Scene
+Scene load_scene(const Game& game)
+{
+    Scene scene;
+    scene.bg_color = glm::vec4(glm::vec3(0xF8, 0xE0, 0xB0) / glm::vec3(255.f), 1.0f);
+
+    auto& backgrounds = scene.objects.background;
+    backgrounds.push_back({});
+    auto& snow_mountains = backgrounds.back();
+    snow_mountains.glo = game.quad_glo;
+    snow_mountains.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-mountain-snow.png"));
+
+    backgrounds.push_back({});
+    auto& green_mountains = backgrounds.back();
+    green_mountains.glo = game.quad_glo;
+    green_mountains.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-mountain-green.png"));
+
+    backgrounds.push_back({});
+    auto& clouds = backgrounds.back();
+    clouds.glo = game.quad_glo;
+    clouds.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-clouds.png"));
+    clouds.motion = Motion{
+        .velocity = glm::vec3(0.03f, 0.f, 0.f),
+        .acceleration = glm::vec3(0.f),
+    };
+
+    return scene;
+}
 
 /// Initialize Game
 int game_init(Game& game, GLFWwindow* window)
@@ -188,50 +247,58 @@ int game_init(Game& game, GLFWwindow* window)
     game.winsize = glm::uvec2(WIDTH, HEIGHT);
     game.shader_program = load_shader_program();
     game.projection = glm::mat4(1.0f);
-    game.quad.glo = create_gl_object(kQuadVertices, sizeof(kQuadVertices) / sizeof(Vertex)),
-    game.quad.transform = Transform{};
-    game.quad.transform.scale.y = -1.0f; // flip image
-    game.bg_texture0 = *load_rgba_texture("super-mario-assets/bg-mountain-snow.png");
-    game.bg_texture1 = *load_rgba_texture("super-mario-assets/bg-mountain-green.png");
-    game.bg_texture2 = *load_rgba_texture("super-mario-assets/bg-clouds.png");
+    game.quad_glo = std::make_shared<GLObject>(create_gl_object(kQuadVertices, sizeof(kQuadVertices) / sizeof(Vertex)));
+    game.scene = load_scene(game);
 
     return 0;
 }
 
+/// Game tick update
+void game_update(Game& game, float dt)
+{
+    // Update all objects
+    for (auto* object_list : game.scene->objects.all_lists()) {
+        for (auto& obj : *object_list) {
+            // Motion system
+            obj.motion.velocity += obj.motion.acceleration * dt;
+            obj.transform.position += obj.motion.velocity * dt;
+        }
+    }
+}
+
 /// Prepare to render
-void begin_render()
+void begin_render(Game& game)
 {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glClearColor(0xF8 / 255.0f, 0xE0 / 255.0f, 0xB0 / 255.0f, 1.0f);
+    const glm::vec4& color = game.scene->bg_color;
+    glClearColor(color.r, color.g, color.b, color.a);
     glClear(GL_COLOR_BUFFER_BIT);
+}
+
+/// Render a textured GLObject
+void draw_object(const GLuint& shader, const GLTexture& texture, const GLObject& glo, const glm::mat4& model)
+{
+  glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model));
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  glBindVertexArray(glo.vao);
+  glDrawArrays(GL_TRIANGLES, 0, glo.count);
 }
 
 /// Render Game scene
 void game_render(Game& game)
 {
-    begin_render();
-    glUseProgram(game.shader_program);
-    glUniformMatrix4fv(glGetUniformLocation(game.shader_program, "projection"), 1, GL_FALSE, glm::value_ptr(game.projection));
+    begin_render(game);
+    int shader = game.shader_program;
+    glUseProgram(shader);
+    glUniformMatrix4fv(glGetUniformLocation(shader, "projection"), 1, GL_FALSE, glm::value_ptr(game.projection));
 
-    glm::mat4 model = game.quad.transform.matrix();
-    glUniformMatrix4fv(glGetUniformLocation(game.shader_program, "model"), 1, GL_FALSE, glm::value_ptr(model));
-    glBindVertexArray(game.quad.glo.vao);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, game.bg_texture0);
-    glUniform1i(glGetUniformLocation(game.shader_program, "texture0"), 0);
-    glDrawArrays(GL_TRIANGLES, 0, game.quad.glo.count);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, game.bg_texture1);
-    glUniform1i(glGetUniformLocation(game.shader_program, "texture0"), 0);
-    glDrawArrays(GL_TRIANGLES, 0, game.quad.glo.count);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, game.bg_texture2);
-    glUniform1i(glGetUniformLocation(game.shader_program, "texture0"), 0);
-    glDrawArrays(GL_TRIANGLES, 0, game.quad.glo.count);
+    for (auto* object_list : game.scene->objects.all_lists()) {
+        for (auto obj = object_list->begin(); obj != object_list->end() && obj->glo && obj->texture; obj++) {
+            draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix());
+        }
+    }
 }
 
 /// Game Loop, only returns when game finishes
@@ -241,8 +308,13 @@ int game_loop(GLFWwindow* window)
     int ret = game_init(game, window);
     if (ret) return ret;
     glfwSetWindowUserPointer(window, &game);
+    float last_time = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
+        float now_time = glfwGetTime();
+        float dt = last_time - now_time;
+        last_time = now_time;
         glfwPollEvents();
+        game_update(game, dt);
         game_render(game);
         glfwSwapBuffers(window);
     }

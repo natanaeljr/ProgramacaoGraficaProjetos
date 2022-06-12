@@ -53,7 +53,7 @@ find_package(Threads REQUIRED)
 add_executable(game)
 target_sources(game PRIVATE
   supermario.cpp
-  stb_image.cpp
+  stb_image.c
 )
 target_link_libraries(game PRIVATE
   GLEW::glew
@@ -64,5 +64,5 @@ target_link_libraries(game PRIVATE
 )
 target_compile_definitions(game PRIVATE
   GLFW_INCLUDE_NONE
-  ASSETS_PATH="${CMAKE_CURRENT_SOURCE_DIR}"
+  ASSETS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/super-mario-assets"
 )
