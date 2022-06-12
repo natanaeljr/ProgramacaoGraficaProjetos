@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <glm/ext/vector_float2.hpp>
 #include <iostream>
 #include <string>
 #include <stdio.h>
@@ -52,9 +53,10 @@ void main() {
 #version 410
 in vec2 texcoord;
 uniform sampler2D texture0;
+uniform vec2 texoffset;
 out vec4 frag_color;
 void main(){
-    frag_color = texture(texture0, texcoord);
+    frag_color = texture(texture0, texcoord + texoffset);
 }
 )";
 
@@ -142,8 +144,8 @@ auto load_rgba_texture(const std::string& inpath) -> std::optional<GLTexture>
     GLuint texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
     glTexImage2D(GL_TEXTURE_2D, 0, type, width, height, 0, type, GL_UNSIGNED_BYTE, data);
@@ -171,8 +173,19 @@ struct Transform {
 
 /// Motion component
 struct Motion {
-  glm::vec3 velocity     {0.0f};
-  glm::vec3 acceleration {0.0f};
+    glm::vec3 velocity     {0.0f};
+    glm::vec3 acceleration {0.0f};
+};
+
+/// Texture Slide component
+struct TextureSlide {
+    glm::vec2 velocity     {0.0f};
+    glm::vec2 acceleration {0.0f};
+};
+
+/// Texture Offset component
+struct TextureOffset {
+    glm::vec2 vec {0.0f};
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -180,10 +193,12 @@ struct Motion {
 
 /// Game Object represents an Entity's data
 struct GameObject {
-    GLObjectRef glo;
     Transform transform;
     Motion motion;
+    GLObjectRef glo;
     GLTextureRef texture;
+    std::optional<TextureSlide> texture_slide;
+    std::optional<TextureOffset> texture_offset;
 };
 
 /// Lists of all Game Objects in a Scene, divised in layers, in order of render
@@ -232,10 +247,11 @@ Scene load_scene(const Game& game)
     auto& clouds = backgrounds.back();
     clouds.glo = game.quad_glo;
     clouds.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-clouds.png"));
-    clouds.motion = Motion{
-        .velocity = glm::vec3(0.03f, 0.f, 0.f),
+    clouds.texture_slide = TextureSlide{
+        .velocity = glm::vec3(0.04f, 0.f, 0.f),
         .acceleration = glm::vec3(0.f),
     };
+    clouds.texture_offset = TextureOffset{};
 
     return scene;
 }
@@ -262,6 +278,11 @@ void game_update(Game& game, float dt)
             // Motion system
             obj.motion.velocity += obj.motion.acceleration * dt;
             obj.transform.position += obj.motion.velocity * dt;
+            // Texture Sliding system
+            if (obj.texture_slide && obj.texture_offset) {
+                obj.texture_slide->velocity += obj.texture_slide->acceleration * dt;
+                obj.texture_offset->vec += obj.texture_slide->velocity * dt;
+            }
         }
     }
 }
@@ -277,13 +298,16 @@ void begin_render(Game& game)
 }
 
 /// Render a textured GLObject
-void draw_object(const GLuint& shader, const GLTexture& texture, const GLObject& glo, const glm::mat4& model)
+void draw_object(const GLuint& shader, const GLTexture& texture, const GLObject& glo,
+                 const glm::mat4& model, std::optional<TextureOffset> texoffset)
 {
-  glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model));
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, texture);
-  glBindVertexArray(glo.vao);
-  glDrawArrays(GL_TRIANGLES, 0, glo.count);
+    glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model));
+    glm::vec2 texoffset_vec = texoffset ? texoffset->vec : glm::vec2(0.f);
+    glUniform2fv(glGetUniformLocation(shader, "texoffset"), 1, glm::value_ptr(texoffset_vec));
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindVertexArray(glo.vao);
+    glDrawArrays(GL_TRIANGLES, 0, glo.count);
 }
 
 /// Render Game scene
@@ -296,7 +320,7 @@ void game_render(Game& game)
 
     for (auto* object_list : game.scene->objects.all_lists()) {
         for (auto obj = object_list->begin(); obj != object_list->end() && obj->glo && obj->texture; obj++) {
-            draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix());
+            draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset);
         }
     }
 }
