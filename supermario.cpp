@@ -38,13 +38,13 @@ int load_shader_program()
 {
     const char* vertex_shader = R"(
 #version 410
-layout ( location = 0 ) in vec3 vPosition;
+layout ( location = 0 ) in vec2 vPosition;
 layout ( location = 1 ) in vec2 vTexCoord;
 uniform mat4 projection;
 uniform mat4 model;
 out vec2 texcoord;
 void main() {
-    gl_Position = projection * model * vec4 ( vPosition, 1.0);
+    gl_Position = projection * model * vec4 (vPosition, 0.0, 1.0f);
     texcoord = vTexCoord;
 }
 )";
@@ -80,7 +80,7 @@ void main(){
 
 /// Vertex data
 struct Vertex {
-    glm::vec3 pos;
+    glm::vec2 pos;
     glm::vec2 texcoord;
 };
 
@@ -111,15 +111,25 @@ GLObject create_gl_object(const Vertex vertices[], const size_t count)
     return {vao, vbo, count};
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Geometry
+
+/// Generate a QUAD with given dimensions and texture offsets
+constexpr auto gen_quad_vertices(glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std::array<Vertex, 6>
+{
+    std::array<Vertex, 6> vertices = {
+        Vertex{.pos = { -v.x, -v.y }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
+        Vertex{.pos = { -v.x, +v.y }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
+        Vertex{.pos = { +v.x, -v.y }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
+        Vertex{.pos = { +v.x, -v.y }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
+        Vertex{.pos = { -v.x, +v.y }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
+        Vertex{.pos = { +v.x, +v.y }, .texcoord = { to.x + ts.x, to.y + ts.y }},
+    };
+    return vertices;
+}
+
 /// Default Vertices of a QUAD object
-static constexpr Vertex kQuadVertices[] = {
-    {.pos = { -1.0f, -1.0f, +0.0f }, .texcoord = { 0.0f, 0.0f }},
-    {.pos = { -1.0f, +1.0f, +0.0f }, .texcoord = { 0.0f, 1.0f }},
-    {.pos = { +1.0f, -1.0f, +0.0f }, .texcoord = { 1.0f, 0.0f }},
-    {.pos = { +1.0f, -1.0f, +0.0f }, .texcoord = { 1.0f, 0.0f }},
-    {.pos = { -1.0f, +1.0f, +0.0f }, .texcoord = { 0.0f, 1.0f }},
-    {.pos = { +1.0f, +1.0f, +0.0f }, .texcoord = { 1.0f, 1.0f }},
-};
+static constexpr auto kQuadVertices = gen_quad_vertices(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.f));
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Textures
@@ -159,22 +169,22 @@ auto load_rgba_texture(const std::string& inpath) -> std::optional<GLTexture>
 
 /// Transform component
 struct Transform {
-    glm::vec3 position {0.0f};
-    glm::vec3 scale    {1.0f};
+    glm::vec2 position {0.0f};
+    glm::vec2 scale    {1.0f};
     glm::quat rotation {1.0f, glm::vec3(0.0f)};
 
     glm::mat4 matrix() {
-        glm::mat4 translation_mat = glm::translate(glm::mat4(1.0f), position);
+        glm::mat4 translation_mat = glm::translate(glm::mat4(1.0f), glm::vec3(position, 0.f));
         glm::mat4 rotation_mat = glm::toMat4(rotation);
-        glm::mat4 scale_mat = glm::scale(glm::mat4(1.0f), scale);
+        glm::mat4 scale_mat = glm::scale(glm::mat4(1.0f), glm::vec3(scale, 0.f));
         return translation_mat * rotation_mat * scale_mat;
     }
 };
 
 /// Motion component
 struct Motion {
-    glm::vec3 velocity     {0.0f};
-    glm::vec3 acceleration {0.0f};
+    glm::vec2 velocity     {0.0f};
+    glm::vec2 acceleration {0.0f};
 };
 
 /// Texture Slide component
@@ -232,6 +242,7 @@ Scene load_scene(const Game& game)
     Scene scene;
     scene.bg_color = glm::vec4(glm::vec3(0xF8, 0xE0, 0xB0) / glm::vec3(255.f), 1.0f);
 
+    // Backgrounds ============================================================
     auto& backgrounds = scene.objects.background;
     backgrounds.push_back({});
     auto& snow_mountains = backgrounds.back();
@@ -248,10 +259,21 @@ Scene load_scene(const Game& game)
     clouds.glo = game.quad_glo;
     clouds.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-clouds.png"));
     clouds.texture_slide = TextureSlide{
-        .velocity = glm::vec3(0.04f, 0.f, 0.f),
-        .acceleration = glm::vec3(0.f),
+        .velocity = glm::vec2(0.04f, 0.f),
+        .acceleration = glm::vec2(0.f),
     };
     clouds.texture_offset = TextureOffset{};
+
+    // Platform Blocks ========================================================
+    GLTextureRef tile_spritesheet = std::make_shared<GLTexture>(*load_rgba_texture("tiles-2.png"));
+    auto& platform = scene.objects.platform;
+    platform.push_back({});
+    auto& tile = platform.back();
+    auto tile_vertices = gen_quad_vertices(glm::vec2(1.f), glm::vec2(34.f, (339.f - 102.f -16.f)) / glm::vec2(339.f), glm::vec2(16.f / 339.f));
+    tile.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+    tile.texture = tile_spritesheet;
+    tile.transform.scale = glm::vec2(0.05f);
+    tile.transform.position = glm::vec2(-1.f + tile.transform.scale.x, -1.f + tile.transform.scale.y);
 
     return scene;
 }
@@ -263,7 +285,7 @@ int game_init(Game& game, GLFWwindow* window)
     game.winsize = glm::uvec2(WIDTH, HEIGHT);
     game.shader_program = load_shader_program();
     game.projection = glm::mat4(1.0f);
-    game.quad_glo = std::make_shared<GLObject>(create_gl_object(kQuadVertices, sizeof(kQuadVertices) / sizeof(Vertex)));
+    game.quad_glo = std::make_shared<GLObject>(create_gl_object(kQuadVertices.data(), kQuadVertices.size()));
     game.scene = load_scene(game);
 
     return 0;
