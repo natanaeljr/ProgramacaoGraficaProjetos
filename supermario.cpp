@@ -135,6 +135,69 @@ constexpr auto gen_quad_geometry(glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std
     return {vertices, indices};
 }
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Sprites
+
+/// Generate quad vertices for a spritesheet texture with frames laid out linearly.
+/// count=3:        .texcoord (U,V)
+/// (0,1) +-----+-----+-----+ (1,1)
+///       |     |     |     |
+///       |  1  |  2  |  3  |
+///       |     |     |     |
+/// (0,0) +-----+-----+-----+ (1,0)
+auto gen_sprite_quads(size_t count, glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std::tuple<std::vector<Vertex>, std::vector<GLushort>>
+{
+    float offx = ts.x / count;
+    std::vector<Vertex> vertices;
+    std::vector<GLushort> indices;
+    vertices.reserve(4 * count);
+    indices.reserve(6 * count);
+    for (size_t i = 0; i < count; i++) {
+        vertices.emplace_back(Vertex{ .pos = { -v.x, -v.y }, .texcoord = { to.x + (i+0)*offx, to.y + 0.0f } });
+        vertices.emplace_back(Vertex{ .pos = { -v.x, +v.y }, .texcoord = { to.x + (i+0)*offx, to.y + ts.y } });
+        vertices.emplace_back(Vertex{ .pos = { +v.x, -v.y }, .texcoord = { to.x + (i+1)*offx, to.y + 0.0f } });
+        vertices.emplace_back(Vertex{ .pos = { +v.x, +v.y }, .texcoord = { to.x + (i+1)*offx, to.y + ts.y } });
+        for (auto v : {0, 1, 2, 2, 1, 3})
+            indices.emplace_back(4*i+v);
+    }
+    return {vertices, indices};
+}
+
+/// Information required to render one frame of a Sprite Animation
+struct SpriteFrame {
+    float duration;    // duration in seconds, negative is infinite
+    size_t ebo_offset; // offset to the first index of this frame in the EBO
+    size_t ebo_count;  // number of elements to render since first index
+};
+
+/// Control data required for a single Sprite Animation object
+struct SpriteAnimation {
+    float last_transit_dt; // deltatime between last transition and now
+    size_t curr_frame_idx; // current frame index
+    std::vector<SpriteFrame> frames;
+    size_t curr_cycle_count; // number of cycles executed
+    size_t max_cycles; // max number of cycles to execute before ending sprite animation, zero for endless
+
+    /// Transition frames
+    void update_frame(float dt) {
+        last_transit_dt += dt;
+        SpriteFrame& curr_frame = frames[curr_frame_idx];
+        if (last_transit_dt >= curr_frame.duration) {
+            last_transit_dt -= curr_frame.duration;
+            if (++curr_frame_idx == frames.size()) {
+                curr_frame_idx = 0;
+                curr_cycle_count++;
+            }
+        }
+    }
+
+    /// Get current sprite frame
+    SpriteFrame& curr_frame() { return frames[curr_frame_idx]; }
+
+    /// Check if animation already ran to maximum number of cycles
+    bool expired() { return max_cycles > 0 && curr_cycle_count >= max_cycles; }
+};
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Textures
 
@@ -253,6 +316,7 @@ struct GameObject {
     GLTextureRef texture;
     std::optional<TextureSlide> texture_slide;
     std::optional<TextureOffset> texture_offset;
+    std::optional<SpriteAnimation> sprite_animation;
 };
 
 /// Lists of all Game Objects in a Scene, divised in layers, in order of render
@@ -295,6 +359,11 @@ Scene load_scene(const Game& game)
     snow_mountains.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-mountain-snow.png"));
     snow_mountains.transform.position = game.camera->canvas / glm::vec2(2.f);
     snow_mountains.transform.scale = game.camera->canvas / glm::vec2(2.f);
+    snow_mountains.texture_slide = TextureSlide{
+        .velocity = glm::vec2(0.01f, 0.f),
+        .acceleration = glm::vec2(0.f),
+    };
+    snow_mountains.texture_offset = TextureOffset{};
 
     backgrounds.push_back({});
     auto& green_mountains = backgrounds.back();
@@ -302,13 +371,18 @@ Scene load_scene(const Game& game)
     green_mountains.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-mountain-green.png"));
     green_mountains.transform.position = game.camera->canvas / glm::vec2(2.f);
     green_mountains.transform.scale = game.camera->canvas / glm::vec2(2.f);
+    green_mountains.texture_slide = TextureSlide{
+        .velocity = glm::vec2(0.03f, 0.f),
+        .acceleration = glm::vec2(0.f),
+    };
+    green_mountains.texture_offset = TextureOffset{};
 
     backgrounds.push_back({});
     auto& clouds = backgrounds.back();
     clouds.glo = game.canvas_quad_glo;
     clouds.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-clouds.png"));
     clouds.texture_slide = TextureSlide{
-        .velocity = glm::vec2(0.04f, 0.f),
+        .velocity = glm::vec2(0.07f, 0.f),
         .acceleration = glm::vec2(0.f),
     };
     clouds.texture_offset = TextureOffset{};
@@ -439,6 +513,29 @@ Scene load_scene(const Game& game)
         }
     }
 
+    // Entities ===============================================================
+    auto& entities = scene.objects.entity;
+    entities.push_back({});
+    auto& mario = entities.back();
+    constexpr glm::vec2 mario_spritesheet_size = glm::vec2(201.f, 120.f);
+    constexpr glm::vec2 mario_frame_size = glm::vec2(17.f, 29.f);
+    constexpr glm::vec2 mario_walk_offset = glm::vec2(0.f, 91.f);
+    auto [mario_vertices, mario_indices] = gen_sprite_quads(2, glm::vec2(mario_frame_size.x/mario_frame_size.y, 1.f), mario_walk_offset / mario_spritesheet_size, (mario_frame_size * glm::vec2(2.f, 1.f)) / mario_spritesheet_size);
+    mario.glo = std::make_shared<GLObject>(create_gl_object(mario_vertices.data(), mario_vertices.size(), mario_indices.data(), mario_indices.size()));
+    mario.texture = std::make_shared<GLTexture>(*load_rgba_texture("mario-3.png"));
+    mario.transform.scale = glm::vec2(1.2f);
+    mario.transform.position = glm::vec2(10.f, 2.f + mario.transform.scale.y);
+    mario.sprite_animation = SpriteAnimation{
+      .last_transit_dt = 0,
+      .curr_frame_idx = 0,
+      .frames = std::vector<SpriteFrame>{
+        { .duration = 0.15, .ebo_offset = 00, .ebo_count = 6 },
+        { .duration = 0.15, .ebo_offset = 12, .ebo_count = 6 },
+      },
+      .curr_cycle_count = 0,
+      .max_cycles = 0,
+    };
+
     return scene;
 }
 
@@ -468,6 +565,10 @@ void game_update(Game& game, float dt)
             // Motion system
             obj.motion.velocity += obj.motion.acceleration * dt;
             obj.transform.position += obj.motion.velocity * dt;
+            // Sprite Animation system
+            if (obj.sprite_animation) {
+                obj.sprite_animation->update_frame(dt);
+            }
             // Texture Sliding system
             if (obj.texture_slide && obj.texture_offset) {
                 obj.texture_slide->velocity += obj.texture_slide->acceleration * dt;
@@ -495,8 +596,8 @@ void set_camera(const GLuint shader, const Camera& camera)
 }
 
 /// Render a textured GLObject
-void draw_object(const GLuint shader, const GLTexture& texture, const GLObject& glo,
-                 const glm::mat4& model, std::optional<TextureOffset> texoffset)
+void draw_object(const GLuint shader, const GLTexture& texture, const GLObject& glo, const glm::mat4& model,
+                 const std::optional<TextureOffset> texoffset, const std::optional<SpriteFrame> sprite)
 {
     glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model));
     glm::vec2 texoffset_vec = texoffset ? texoffset->vec : glm::vec2(0.f);
@@ -504,7 +605,9 @@ void draw_object(const GLuint shader, const GLTexture& texture, const GLObject& 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     glBindVertexArray(glo.vao);
-    glDrawElements(GL_TRIANGLES, glo.num_indices, GL_UNSIGNED_SHORT, 0);
+    size_t ebo_offset = sprite ? sprite->ebo_offset : 0;
+    size_t ebo_count = sprite ? sprite->ebo_count : glo.num_indices;
+    glDrawElements(GL_TRIANGLES, ebo_count, GL_UNSIGNED_SHORT, (const void*)ebo_offset);
 }
 
 /// Render the canvas grid
@@ -519,7 +622,7 @@ void render_grid(Game& game, GLuint shader)
             Transform transform;
             transform.position = glm::vec2(0.5f + i, 0.5f + j);
             transform.scale = glm::vec2(0.5);
-            draw_object(shader, *game.white_texture, glo, transform.matrix(), std::nullopt);
+            draw_object(shader, *game.white_texture, glo, transform.matrix(), std::nullopt, std::nullopt);
         }
     }
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -535,7 +638,8 @@ void game_render(Game& game)
 
     for (auto* object_list : game.scene->objects.all_lists()) {
         for (auto obj = object_list->begin(); obj != object_list->end() && obj->glo && obj->texture; obj++) {
-            draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset);
+            auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
+            draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite);
         }
     }
 
@@ -552,7 +656,7 @@ int game_loop(GLFWwindow* window)
     float last_time = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
         float now_time = glfwGetTime();
-        float dt = last_time - now_time;
+        float dt = now_time - last_time;
         last_time = now_time;
         glfwPollEvents();
         game_update(game, dt);
