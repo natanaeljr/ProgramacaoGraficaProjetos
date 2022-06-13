@@ -28,13 +28,15 @@ using namespace std::string_literals;
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Settings
 
-constexpr int WIDTH = 900, HEIGHT = 500; // window size
+constexpr size_t WIDTH = 900, HEIGHT = 600;
+
+constexpr float ASPECT_RATIO = (float)WIDTH / (float)HEIGHT;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Shader
 
 /// Compile and link shader program
-int load_shader_program()
+GLuint load_shader_program()
 {
     const char* vertex_shader = R"(
 #version 410
@@ -60,15 +62,15 @@ void main(){
 }
 )";
 
-    int vs = glCreateShader(GL_VERTEX_SHADER);
+    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vs, 1, &vertex_shader, NULL);
     glCompileShader(vs);
 
-    int fs = glCreateShader(GL_FRAGMENT_SHADER);
+    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(fs, 1, &fragment_shader, NULL);
     glCompileShader(fs);
 
-    int sp = glCreateProgram();
+    GLuint sp = glCreateProgram();
     glAttachShader(sp, fs);
     glAttachShader(sp, vs);
     glLinkProgram(sp);
@@ -95,14 +97,14 @@ struct GLObject {
 using GLObjectRef = std::shared_ptr<GLObject>;
 
 /// Create an Object in GPU memory
-GLObject create_gl_object(const Vertex vertices[], const size_t count)
+GLObject create_gl_object(const Vertex vertices[], const size_t count, GLenum usage = GL_STATIC_DRAW)
 {
     GLuint vao, vbo;
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, count * sizeof(Vertex), vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, count * sizeof(Vertex), vertices, usage);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (GLvoid *)offsetof(Vertex, pos));
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (GLvoid *)offsetof(Vertex, texcoord));
@@ -127,9 +129,6 @@ constexpr auto gen_quad_vertices(glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std
     };
     return vertices;
 }
-
-/// Default Vertices of a QUAD object
-static constexpr auto kQuadVertices = gen_quad_vertices(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.f));
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Textures
@@ -163,6 +162,46 @@ auto load_rgba_texture(const std::string& inpath) -> std::optional<GLTexture>
     stbi_image_free(data);
     return texture;
 }
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Window | Viewport | Camera
+
+/// Window controller
+struct Window {
+    struct GLFWwindow* glfw;
+    glm::uvec2 size;
+
+    /// Get window aspect ratio
+    float aspect_ratio() const { return (float)size.x / size.y; }
+    float aspect_ratio_inverse() const { return (float)size.y / size.x; }
+};
+
+/// Viewport controller
+struct Viewport {
+    glm::uvec2 offset;
+    glm::uvec2 size;
+
+    /// Get viewport aspect ratio
+    float aspect_ratio() const { return (float)size.x / size.y; }
+    float aspect_ratio_inverse() const { return (float)size.y / size.x; }
+};
+
+/// Camera controller
+struct Camera {
+    glm::vec2 canvas;
+    glm::mat4 projection;
+    glm::mat4 view;
+
+    /// Create Orthographic Camera
+    static Camera create(float aspect_ratio) {
+        auto canvas = glm::vec2(30.f, 30.f / aspect_ratio);
+        return {
+            .canvas = canvas,
+            .projection = glm::ortho(0.f, canvas.x, 0.f, canvas.y, +1.0f, -1.0f),
+            .view = glm::inverse(glm::mat4(1.0f)),
+        };
+    }
+};
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Components
@@ -228,11 +267,12 @@ struct Scene {
 
 /// All Game data
 struct Game {
-    GLFWwindow* window;
-    glm::uvec2 winsize;
-    int shader_program;
-    glm::mat4 projection;
-    GLObjectRef quad_glo;
+    Window window;
+    Viewport viewport;
+    GLuint shader_program;
+    GLObjectRef canvas_quad_glo;
+    GLTextureRef white_texture;
+    std::optional<Camera> camera;
     std::optional<Scene> scene;
 };
 
@@ -246,34 +286,141 @@ Scene load_scene(const Game& game)
     auto& backgrounds = scene.objects.background;
     backgrounds.push_back({});
     auto& snow_mountains = backgrounds.back();
-    snow_mountains.glo = game.quad_glo;
+    snow_mountains.glo = game.canvas_quad_glo;
     snow_mountains.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-mountain-snow.png"));
+    snow_mountains.transform.position = game.camera->canvas / glm::vec2(2.f);
+    snow_mountains.transform.scale = game.camera->canvas / glm::vec2(2.f);
 
     backgrounds.push_back({});
     auto& green_mountains = backgrounds.back();
-    green_mountains.glo = game.quad_glo;
+    green_mountains.glo = game.canvas_quad_glo;
     green_mountains.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-mountain-green.png"));
+    green_mountains.transform.position = game.camera->canvas / glm::vec2(2.f);
+    green_mountains.transform.scale = game.camera->canvas / glm::vec2(2.f);
 
     backgrounds.push_back({});
     auto& clouds = backgrounds.back();
-    clouds.glo = game.quad_glo;
+    clouds.glo = game.canvas_quad_glo;
     clouds.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-clouds.png"));
     clouds.texture_slide = TextureSlide{
         .velocity = glm::vec2(0.04f, 0.f),
         .acceleration = glm::vec2(0.f),
     };
     clouds.texture_offset = TextureOffset{};
+    clouds.transform.position = game.camera->canvas / glm::vec2(2.f);
+    clouds.transform.scale = game.camera->canvas / glm::vec2(2.f);
 
     // Platform Blocks ========================================================
-    GLTextureRef tile_spritesheet = std::make_shared<GLTexture>(*load_rgba_texture("tiles-2.png"));
+    GLTextureRef tileset_tex = std::make_shared<GLTexture>(*load_rgba_texture("tiles-2.png"));
+    constexpr glm::vec2 tileset_size = glm::vec2(339.f, 339.f);
+    constexpr glm::vec2 tile_normal_size = glm::vec2(16.f / 339.f);
+    constexpr glm::vec2 tile_offset_green_middle_top = glm::vec2(34.f, 221.f);
+    constexpr glm::vec2 tile_offset_green_middle_bottom = glm::vec2(34.f, 204.f);
+    constexpr glm::vec2 tile_offset_green_left_top = glm::vec2(0.f, 221.f);
+    constexpr glm::vec2 tile_offset_green_right_top = glm::vec2(68.f, 221.f);
+    constexpr glm::vec2 tile_offset_green_left_bottom = glm::vec2(0.f, 204.f);
+    constexpr glm::vec2 tile_offset_green_right_bottom = glm::vec2(68.f, 204.f);
+
     auto& platform = scene.objects.platform;
-    platform.push_back({});
-    auto& tile = platform.back();
-    auto tile_vertices = gen_quad_vertices(glm::vec2(1.f), glm::vec2(34.f, (339.f - 102.f -16.f)) / glm::vec2(339.f), glm::vec2(16.f / 339.f));
-    tile.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
-    tile.texture = tile_spritesheet;
-    tile.transform.scale = glm::vec2(0.05f);
-    tile.transform.position = glm::vec2(-1.f + tile.transform.scale.x, -1.f + tile.transform.scale.y);
+
+    // Ground =================================================================
+    for (float i = 0; i < game.camera->canvas.x * 3; i++) {
+        platform.push_back({});
+        auto& tile_top = platform.back();
+        auto tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_middle_top / tileset_size, tile_normal_size);
+        tile_top.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_top.texture = tileset_tex;
+        tile_top.transform.scale = glm::vec2(0.5f);
+        tile_top.transform.position = glm::vec2(tile_top.transform.scale.x + i, tile_top.transform.scale.y + 1.f);
+
+        platform.push_back({});
+        auto& tile_bottom = platform.back();
+        tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_middle_bottom / tileset_size, tile_normal_size);
+        tile_bottom.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_bottom.texture = tileset_tex;
+        tile_bottom.transform.scale = glm::vec2(0.5f);
+        tile_bottom.transform.position = glm::vec2(tile_bottom.transform.scale.x + i, tile_bottom.transform.scale.y);
+    }
+
+    // Platf1 =================================================================
+    constexpr glm::vec2 platf1_offset = glm::vec2(20.f, 2.f);
+    {
+        platform.push_back({});
+        auto& tile_top_left = platform.back();
+        auto tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_left_top / tileset_size, tile_normal_size);
+        tile_top_left.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_top_left.texture = tileset_tex;
+        tile_top_left.transform.scale = glm::vec2(0.5f);
+        tile_top_left.transform.position = glm::vec2(platf1_offset.x + tile_top_left.transform.scale.x, platf1_offset.y + tile_top_left.transform.scale.y + 2.f);
+
+        platform.push_back({});
+        auto& tile_middle_left = platform.back();
+        tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_left_bottom / tileset_size, tile_normal_size);
+        tile_middle_left.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_middle_left.texture = tileset_tex;
+        tile_middle_left.transform.scale = glm::vec2(0.5f);
+        tile_middle_left.transform.position = glm::vec2(platf1_offset.x + tile_middle_left.transform.scale.x, platf1_offset.y + tile_middle_left.transform.scale.y + 1.f);
+
+        platform.push_back({});
+        auto& tile_bottom_left = platform.back();
+        tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_left_bottom / tileset_size, tile_normal_size);
+        tile_bottom_left.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_bottom_left.texture = tileset_tex;
+        tile_bottom_left.transform.scale = glm::vec2(0.5f);
+        tile_bottom_left.transform.position = glm::vec2(platf1_offset.x + tile_bottom_left.transform.scale.x, platf1_offset.y + tile_bottom_left.transform.scale.y + 0.f);
+    }
+
+    for (float i = 1; i < 6; i++) {
+        platform.push_back({});
+        auto& tile_top = platform.back();
+        auto tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_middle_top / tileset_size, tile_normal_size);
+        tile_top.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_top.texture = tileset_tex;
+        tile_top.transform.scale = glm::vec2(0.5f);
+        tile_top.transform.position = glm::vec2(platf1_offset.x + tile_top.transform.scale.x + i, platf1_offset.y + tile_top.transform.scale.y + 2.f);
+
+        platform.push_back({});
+        auto& tile_middle = platform.back();
+        tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_middle_bottom / tileset_size, tile_normal_size);
+        tile_middle.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_middle.texture = tileset_tex;
+        tile_middle.transform.scale = glm::vec2(0.5f);
+        tile_middle.transform.position = glm::vec2(platf1_offset.x + tile_middle.transform.scale.x + i, platf1_offset.y + tile_middle.transform.scale.y + 1.f);
+
+        platform.push_back({});
+        auto& tile_bottom = platform.back();
+        tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_middle_bottom / tileset_size, tile_normal_size);
+        tile_bottom.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_bottom.texture = tileset_tex;
+        tile_bottom.transform.scale = glm::vec2(0.5f);
+        tile_bottom.transform.position = glm::vec2(platf1_offset.x + tile_bottom.transform.scale.x + i, platf1_offset.y + tile_bottom.transform.scale.y + 0.f);
+    }
+
+    {
+        platform.push_back({});
+        auto& tile_top_right = platform.back();
+        auto tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_right_top / tileset_size, tile_normal_size);
+        tile_top_right.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_top_right.texture = tileset_tex;
+        tile_top_right.transform.scale = glm::vec2(0.5f);
+        tile_top_right.transform.position = glm::vec2(platf1_offset.x + tile_top_right.transform.scale.x + 6, platf1_offset.y + tile_top_right.transform.scale.y + 2.f);
+
+        platform.push_back({});
+        auto& tile_middle_right = platform.back();
+        tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_right_bottom / tileset_size, tile_normal_size);
+        tile_middle_right.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_middle_right.texture = tileset_tex;
+        tile_middle_right.transform.scale = glm::vec2(0.5f);
+        tile_middle_right.transform.position = glm::vec2(platf1_offset.x + tile_middle_right.transform.scale.x + 6, platf1_offset.y + tile_middle_right.transform.scale.y + 1.f);
+
+        platform.push_back({});
+        auto& tile_bottom_right = platform.back();
+        tile_vertices = gen_quad_vertices(glm::vec2(1.f), tile_offset_green_right_bottom / tileset_size, tile_normal_size);
+        tile_bottom_right.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size()));
+        tile_bottom_right.texture = tileset_tex;
+        tile_bottom_right.transform.scale = glm::vec2(0.5f);
+        tile_bottom_right.transform.position = glm::vec2(platf1_offset.x + tile_bottom_right.transform.scale.x + 6, platf1_offset.y + tile_bottom_right.transform.scale.y + 0.f);
+    }
 
     return scene;
 }
@@ -281,11 +428,15 @@ Scene load_scene(const Game& game)
 /// Initialize Game
 int game_init(Game& game, GLFWwindow* window)
 {
-    game.window = window;
-    game.winsize = glm::uvec2(WIDTH, HEIGHT);
+    game.window.glfw = window;
+    game.window.size = glm::uvec2(WIDTH, HEIGHT);
+    game.viewport.size = glm::uvec2(WIDTH, HEIGHT);
+    game.viewport.offset = glm::uvec2(0);
     game.shader_program = load_shader_program();
-    game.projection = glm::mat4(1.0f);
-    game.quad_glo = std::make_shared<GLObject>(create_gl_object(kQuadVertices.data(), kQuadVertices.size()));
+    auto quad_vertices = gen_quad_vertices(glm::vec2(1.f), glm::vec2(0.f), glm::vec2((float)WIDTH / (float)HEIGHT, 1.0f));
+    game.canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size()));
+    game.white_texture = std::make_shared<GLTexture>(*load_rgba_texture("white.png"));
+    game.camera = Camera::create(game.viewport.aspect_ratio());
     game.scene = load_scene(game);
 
     return 0;
@@ -319,8 +470,15 @@ void begin_render(Game& game)
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
+/// Upload camera matrix to shader
+void set_camera(const GLuint shader, const Camera& camera)
+{
+    glUniformMatrix4fv(glGetUniformLocation(shader, "view"), 1, GL_FALSE, glm::value_ptr(camera.view));
+    glUniformMatrix4fv(glGetUniformLocation(shader, "projection"), 1, GL_FALSE, glm::value_ptr(camera.projection));
+}
+
 /// Render a textured GLObject
-void draw_object(const GLuint& shader, const GLTexture& texture, const GLObject& glo,
+void draw_object(const GLuint shader, const GLTexture& texture, const GLObject& glo,
                  const glm::mat4& model, std::optional<TextureOffset> texoffset)
 {
     glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model));
@@ -332,19 +490,39 @@ void draw_object(const GLuint& shader, const GLTexture& texture, const GLObject&
     glDrawArrays(GL_TRIANGLES, 0, glo.count);
 }
 
+/// Render the canvas grid
+void render_grid(Game& game, GLuint shader)
+{
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    auto vertices = gen_quad_vertices(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
+    GLObject glo = create_gl_object(vertices.data(), vertices.size());
+    glBindVertexArray(glo.vao);
+    for (float i = 0; i < game.camera->canvas.x; i++) {
+        for (float j = 0; j < game.camera->canvas.y; j++) {
+            Transform transform;
+            transform.position = glm::vec2(0.5f + i, 0.5f + j);
+            transform.scale = glm::vec2(0.5);
+            draw_object(shader, *game.white_texture, glo, transform.matrix(), std::nullopt);
+        }
+    }
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
+
 /// Render Game scene
 void game_render(Game& game)
 {
     begin_render(game);
-    int shader = game.shader_program;
+    GLuint shader = game.shader_program;
     glUseProgram(shader);
-    glUniformMatrix4fv(glGetUniformLocation(shader, "projection"), 1, GL_FALSE, glm::value_ptr(game.projection));
+    set_camera(shader, *game.camera);
 
     for (auto* object_list : game.scene->objects.all_lists()) {
         for (auto obj = object_list->begin(); obj != object_list->end() && obj->glo && obj->texture; obj++) {
             draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset);
         }
     }
+
+    //render_grid(game, shader);
 }
 
 /// Game Loop, only returns when game finishes
@@ -378,7 +556,7 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
     if (!game) return;
 
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-        glfwSetWindowShouldClose(game->window, 1);
+        glfwSetWindowShouldClose(game->window.glfw, 1);
     }
 }
 
@@ -399,9 +577,19 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
-    game->winsize.x = width;
-    game->winsize.x = height;
+
     glViewport(0, 0, width, height);
+    game->camera = Camera::create((float)width / (float)height);
+
+    auto quad_vertices = gen_quad_vertices(glm::vec2(1.f), glm::vec2(0.f), glm::vec2((float)width / (float)height, 1.0f));
+    game->canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size()));
+
+    game->window.size.y = height;
+    game->window.size.x = width;
+    game->viewport.size.x = (width);
+    game->viewport.size.y = (height);
+    game->viewport.offset.x = 0;
+    game->viewport.offset.y = 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -417,7 +605,7 @@ int create_window(GLFWwindow*& window)
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_RESIZABLE, GL_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 4);
-    window = glfwCreateWindow(WIDTH, HEIGHT, "COLOR GAME", nullptr, nullptr);
+    window = glfwCreateWindow(WIDTH, HEIGHT, "Super Mario", nullptr, nullptr);
     if (window == nullptr) {
         std::cerr << "Failed to create GLFW Window" << std::endl;
         glfwTerminate();
@@ -427,7 +615,6 @@ int create_window(GLFWwindow*& window)
     glfwSetKeyCallback(window, key_event_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
-    glfwSetWindowAspectRatio(window, WIDTH, HEIGHT);
     glfwSwapInterval(1); // vsync
     return 0;
 }
