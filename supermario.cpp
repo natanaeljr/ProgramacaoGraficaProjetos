@@ -271,6 +271,35 @@ struct Camera {
     }
 };
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Collision
+
+/// Axis-aligned Bounding Box component
+/// in respect to the object's local space
+/// (no rotation support)
+///     +---+ max
+///     | x |
+/// min +---+    x = center = origin = transform.position
+struct Aabb {
+  glm::vec2 min {-1.0f};
+  glm::vec2 max {+1.0f};
+
+  Aabb transform(const glm::mat4& matrix) const {
+    glm::vec2 a = matrix * glm::vec4(min, 0.0f, 1.0f);
+    glm::vec2 b = matrix * glm::vec4(max, 0.0f, 1.0f);
+    return Aabb{glm::min(a, b), glm::max(a, b)};
+  }
+};
+
+/// Check for collision between two AABBs
+bool collision(const Aabb& a, const Aabb& b)
+{
+  return a.min.x < b.max.x &&
+         a.max.x > b.min.x &&
+         a.min.y < b.max.y &&
+         a.max.y > b.min.y;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Components
 
@@ -337,6 +366,7 @@ struct GameObject {
     std::optional<TextureOffset> texture_offset;
     std::optional<SpriteAnimation> sprite_animation;
     std::optional<EntityState> entity_state;
+    std::optional<Aabb> aabb;
 };
 
 /// Lists of all Game Objects in a Scene, divised in layers, in order of render
@@ -361,10 +391,13 @@ struct Game {
     Viewport viewport;
     GLuint shader_program;
     GLObjectRef canvas_quad_glo;
+    glm::vec2 map_size;
     GLTextureRef white_texture;
     std::optional<Camera> camera;
     std::optional<Scene> scene;
     std::optional<KeyStateMap> key_states;
+    bool debug_grid;
+    bool debug_aabb;
 };
 
 /// Load Main Scene
@@ -535,6 +568,27 @@ Scene load_scene(const Game& game)
         }
     }
 
+    // Platform AABBs
+    {   // groud
+        platform.push_back({});
+        auto& obj = platform.back();
+        auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
+        obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+        obj.aabb = Aabb{ .min= {-1.f, -1.f}, .max = {+1.f, +0.99f} };
+        obj.transform.position = glm::vec2(game.map_size.x / 2.f, 1.f);
+        obj.transform.scale = glm::vec2(game.map_size.x / 2.f, 1.f);
+    }
+    {   // platf1
+        platform.push_back({});
+        auto& obj = platform.back();
+        auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
+        obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+        obj.aabb = Aabb{ .min= {-0.98f, -1.f}, .max = {+0.98f, +0.99f} };
+        obj.transform.position = glm::vec2(23.5f, 3.5f);
+        obj.transform.scale = glm::vec2(3.5f, 1.5f);
+    }
+
+
     // Entities ===============================================================
     auto& entities = scene.objects.entity;
     entities.push_back({});
@@ -557,6 +611,7 @@ Scene load_scene(const Game& game)
       .curr_cycle_count = 0,
       .max_cycles = 0,
     };
+    mario.aabb = Aabb{ .min= {-0.45f, -0.99f}, .max = {+0.45f, +0.8f} };
 
     return scene;
 }
@@ -571,10 +626,13 @@ int game_init(Game& game, GLFWwindow* window)
     game.shader_program = load_shader_program();
     auto [quad_vertices, quad_indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2((float)WIDTH / (float)HEIGHT, 1.0f));
     game.canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size(), quad_indices.data(), quad_indices.size()));
+    game.map_size = glm::vec2(90.f, 30.f);
     game.white_texture = std::make_shared<GLTexture>(*load_rgba_texture("white.png"));
     game.camera = Camera::create(game.viewport.aspect_ratio());
     game.scene = load_scene(game);
     game.key_states = KeyStateMap(GLFW_KEY_LAST);
+    game.debug_grid = false;
+    game.debug_aabb = false;
 
     return 0;
 }
@@ -651,6 +709,34 @@ void render_grid(Game& game, GLuint shader)
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
+/// Render AABBs for all objects that have it
+void render_aabbs(Game& game, GLuint shader)
+{
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
+    GLObject glo = create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size(), GL_STREAM_DRAW);
+    glBindVertexArray(glo.vao);
+    for (auto* object_list : game.scene->objects.all_lists()) {
+        for (auto obj = object_list->rbegin(); obj != object_list->rend(); obj++) {
+            if (obj->aabb) {
+                Aabb& aabb = *obj->aabb;
+                auto vertices = std::vector<Vertex>{
+                    { .pos = { aabb.min.x, aabb.min.y }, .texcoord = { 1.0f, 0.0f } },
+                    { .pos = { aabb.min.x, aabb.max.y }, .texcoord = { 1.0f, 1.0f } },
+                    { .pos = { aabb.max.x, aabb.min.y }, .texcoord = { 0.0f, 1.0f } },
+                    { .pos = { aabb.max.x, aabb.max.y }, .texcoord = { 0.0f, 0.0f } },
+                };
+                //glBindVertexArray(bbox_glo.vao);
+                glBindBuffer(GL_ARRAY_BUFFER, glo.vbo);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
+                draw_object(shader, *game.white_texture, glo, obj->transform.matrix(), std::nullopt, std::nullopt);
+            }
+        }
+    }
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+}
+
 /// Render Game scene
 void game_render(Game& game)
 {
@@ -666,7 +752,11 @@ void game_render(Game& game)
         }
     }
 
-    //render_grid(game, shader);
+    if (game.debug_aabb)
+        render_aabbs(game, shader);
+
+    if (game.debug_grid)
+        render_grid(game, shader);
 }
 
 /// Game Loop, only returns when game finishes
@@ -701,6 +791,7 @@ void key_left_right_handler(struct Game& game, int key, int action, int mods)
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         game.scene->player().motion.velocity.x = 8.f * direction;
         game.scene->player().motion.acceleration.x = 0.f * direction;
+        game.scene->player().transform.scale.x = 1.2f * direction;
     }
     else if (action == GLFW_RELEASE) {
         const int other_key = (key == GLFW_KEY_LEFT) ? GLFW_KEY_RIGHT : GLFW_KEY_LEFT;
@@ -715,6 +806,18 @@ void key_left_right_handler(struct Game& game, int key, int action, int mods)
     }
 }
 
+void key_f6_handler(struct Game& game, int key, int action, int mods)
+{
+  if (action == GLFW_PRESS)
+    game.debug_grid = !game.debug_grid;
+}
+
+void key_f7_handler(struct Game& game, int key, int action, int mods)
+{
+  if (action == GLFW_PRESS)
+    game.debug_aabb = !game.debug_aabb;
+}
+
 /// Handle Key input event
 void key_event_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
@@ -726,6 +829,12 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
     }
     else if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT) {
         key_left_right_handler(*game, key, action, mods);
+    }
+    else if (key == GLFW_KEY_F6) {
+        key_f6_handler(*game, key, action, mods);
+    }
+    else if (key == GLFW_KEY_F7) {
+        key_f7_handler(*game, key, action, mods);
     }
 
     game->key_states.value()[key] = (action == GLFW_PRESS);
