@@ -305,6 +305,25 @@ struct TextureOffset {
     glm::vec2 vec {0.0f};
 };
 
+/// Entity State component
+enum class EntityState {
+    IDLE,
+    WALKING,
+    JUMPING,
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// Forward-declarations
+
+/// GLFW_KEY_*
+using Key = int;
+/// Key event handler
+using KeyHandler = std::function<void(struct Game&, int key, int action, int mods)>;
+/// Map key code to event handlers
+using KeyHandlerMap = std::unordered_map<Key, KeyHandler>;
+/// Map key to its state, pressed = true, released = false
+using KeyStateMap = std::unordered_map<Key, bool>;
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Game
 
@@ -317,21 +336,23 @@ struct GameObject {
     std::optional<TextureSlide> texture_slide;
     std::optional<TextureOffset> texture_offset;
     std::optional<SpriteAnimation> sprite_animation;
+    std::optional<EntityState> entity_state;
 };
 
 /// Lists of all Game Objects in a Scene, divised in layers, in order of render
 struct ObjectLists {
-  std::vector<GameObject> background;
-  std::vector<GameObject> platform;
-  std::vector<GameObject> entity;
-  /// Get all layers of objects
-  auto all_lists() { return std::array{ &background, &platform, &entity }; }
+    std::vector<GameObject> background;
+    std::vector<GameObject> platform;
+    std::vector<GameObject> entity;
+    /// Get all layers of objects
+    auto all_lists() { return std::array{ &background, &platform, &entity }; }
 };
 
 /// Generic Scene structure
 struct Scene {
-  ObjectLists objects;
-  glm::vec4 bg_color;
+    ObjectLists objects;
+    glm::vec4 bg_color;
+    GameObject& player() { return objects.entity.front(); }
 };
 
 /// All Game data
@@ -343,6 +364,7 @@ struct Game {
     GLTextureRef white_texture;
     std::optional<Camera> camera;
     std::optional<Scene> scene;
+    std::optional<KeyStateMap> key_states;
 };
 
 /// Load Main Scene
@@ -529,8 +551,8 @@ Scene load_scene(const Game& game)
       .last_transit_dt = 0,
       .curr_frame_idx = 0,
       .frames = std::vector<SpriteFrame>{
-        { .duration = 0.15, .ebo_offset = 00, .ebo_count = 6 },
-        { .duration = 0.15, .ebo_offset = 12, .ebo_count = 6 },
+        { .duration = 0.10, .ebo_offset = 00, .ebo_count = 6 },
+        { .duration = 0.10, .ebo_offset = 12, .ebo_count = 6 },
       },
       .curr_cycle_count = 0,
       .max_cycles = 0,
@@ -552,6 +574,7 @@ int game_init(Game& game, GLFWwindow* window)
     game.white_texture = std::make_shared<GLTexture>(*load_rgba_texture("white.png"));
     game.camera = Camera::create(game.viewport.aspect_ratio());
     game.scene = load_scene(game);
+    game.key_states = KeyStateMap(GLFW_KEY_LAST);
 
     return 0;
 }
@@ -670,6 +693,28 @@ int game_loop(GLFWwindow* window)
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Events
 
+void key_left_right_handler(struct Game& game, int key, int action, int mods)
+{
+    assert(key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT);
+    const float direction = (key == GLFW_KEY_LEFT ? -1.f : +1.f);
+
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        game.scene->player().motion.velocity.x = 8.f * direction;
+        game.scene->player().motion.acceleration.x = 0.f * direction;
+    }
+    else if (action == GLFW_RELEASE) {
+        const int other_key = (key == GLFW_KEY_LEFT) ? GLFW_KEY_RIGHT : GLFW_KEY_LEFT;
+        if (game.key_states.value()[other_key]) {
+            // revert to opposite key's movement
+            key_left_right_handler(game, other_key, GLFW_REPEAT, mods);
+        } else {
+            // both arrow keys release, cease movement
+            game.scene->player().motion.velocity.x = 0.0f;
+            game.scene->player().motion.acceleration.x = 0.0f;
+        }
+    }
+}
+
 /// Handle Key input event
 void key_event_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
@@ -679,6 +724,11 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(game->window.glfw, 1);
     }
+    else if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT) {
+        key_left_right_handler(*game, key, action, mods);
+    }
+
+    game->key_states.value()[key] = (action == GLFW_PRESS);
 }
 
 /// Handle Mouse click events
