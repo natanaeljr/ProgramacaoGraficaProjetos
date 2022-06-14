@@ -323,6 +323,10 @@ struct Motion {
     glm::vec2 acceleration {0.0f};
 };
 
+/// Gravity component
+struct Gravity {
+};
+
 /// Texture Slide component
 struct TextureSlide {
     glm::vec2 velocity     {0.0f};
@@ -366,6 +370,7 @@ struct GameObject {
     std::optional<TextureOffset> texture_offset;
     std::optional<SpriteAnimation> sprite_animation;
     std::optional<EntityState> entity_state;
+    std::optional<Gravity> gravity;
     std::optional<Aabb> aabb;
 };
 
@@ -584,8 +589,8 @@ Scene load_scene(const Game& game)
         auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
         obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
         obj.aabb = Aabb{ .min= {-0.98f, -1.f}, .max = {+0.98f, +0.99f} };
-        obj.transform.position = glm::vec2(23.5f, 3.5f);
-        obj.transform.scale = glm::vec2(3.5f, 1.5f);
+        obj.transform.position = glm::vec2(23.5f, 4.75f);
+        obj.transform.scale = glm::vec2(3.5f, 0.25f);
     }
 
 
@@ -612,6 +617,7 @@ Scene load_scene(const Game& game)
       .max_cycles = 0,
     };
     mario.aabb = Aabb{ .min= {-0.45f, -0.99f}, .max = {+0.45f, +0.8f} };
+    mario.gravity = Gravity{};
 
     return scene;
 }
@@ -643,6 +649,11 @@ void game_update(Game& game, float dt)
     // Update all objects
     for (auto* object_list : game.scene->objects.all_lists()) {
         for (auto& obj : *object_list) {
+            // Gravity system
+            if (obj.gravity) {
+                constexpr float kGravityFactor = 20.f;
+                obj.motion.acceleration.y = -kGravityFactor;
+            }
             // Motion system
             obj.motion.velocity += obj.motion.acceleration * dt;
             obj.transform.position += obj.motion.velocity * dt;
@@ -654,6 +665,26 @@ void game_update(Game& game, float dt)
             if (obj.texture_slide && obj.texture_offset) {
                 obj.texture_slide->velocity += obj.texture_slide->acceleration * dt;
                 obj.texture_offset->vec += obj.texture_slide->velocity * dt;
+            }
+        }
+    }
+
+    // Collision system
+    {
+        auto& entities = game.scene->objects.entity;
+        for (auto entt = entities.begin(); entt != entities.end(); entt++) {
+            auto& tiles = game.scene->objects.platform;
+            for (auto& tile : tiles) {
+                Aabb tile_aabb = tile.aabb->transform(tile.transform.matrix());
+                Aabb entt_aabb = entt->aabb->transform(entt->transform.matrix());
+                if (collision(tile_aabb, entt_aabb)) {
+                    float y_top_diff = entt_aabb.max.y - tile_aabb.max.y;
+                    float y_bottom_diff = entt_aabb.min.y - tile_aabb.max.y;
+                    if (y_top_diff > 0.f && y_bottom_diff) {
+                        entt->transform.position.y += -y_bottom_diff;
+                        entt->motion.velocity.y = 0.f;
+                    }
+                }
             }
         }
     }
@@ -790,7 +821,6 @@ void key_left_right_handler(struct Game& game, int key, int action, int mods)
 
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         game.scene->player().motion.velocity.x = 8.f * direction;
-        game.scene->player().motion.acceleration.x = 0.f * direction;
         game.scene->player().transform.scale.x = 1.2f * direction;
     }
     else if (action == GLFW_RELEASE) {
@@ -803,6 +833,16 @@ void key_left_right_handler(struct Game& game, int key, int action, int mods)
             game.scene->player().motion.velocity.x = 0.0f;
             game.scene->player().motion.acceleration.x = 0.0f;
         }
+    }
+}
+
+void key_space_handler(struct Game& game, int key, int action, int mods)
+{
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        game.scene->player().motion.velocity.y = 10.f;
+    }
+    else if (action == GLFW_RELEASE) {
+        game.scene->player().motion.velocity.y = 0.0f;
     }
 }
 
@@ -829,6 +869,9 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
     }
     else if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT) {
         key_left_right_handler(*game, key, action, mods);
+    }
+    else if (key == GLFW_KEY_SPACE) {
+        key_space_handler(*game, key, action, mods);
     }
     else if (key == GLFW_KEY_F6) {
         key_f6_handler(*game, key, action, mods);
