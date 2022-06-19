@@ -1,5 +1,4 @@
 #include <cstdio>
-#include <glm/ext/vector_float2.hpp>
 #include <iostream>
 #include <string>
 #include <stdio.h>
@@ -10,9 +9,12 @@
 #include <optional>
 #include <algorithm>
 #include <memory>
+#include <functional>
+#include <unordered_map>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
@@ -54,9 +56,10 @@ void main() {
 in vec2 texcoord;
 uniform sampler2D texture0;
 uniform vec2 texoffset;
+uniform vec4 color;
 out vec4 frag_color;
 void main(){
-    frag_color = texture(texture0, texcoord + texoffset);
+    frag_color = texture(texture0, texcoord + texoffset) * color;
 }
 )";
 
@@ -123,10 +126,10 @@ GLObject create_gl_object(const Vertex vertices[], const size_t num_vertices, co
 constexpr auto gen_quad_geometry(glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std::tuple<std::array<Vertex, 4>, std::array<GLushort, 6>>
 {
     std::array<Vertex, 4> vertices = {
-        Vertex{.pos = { -v.x, -v.y }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
-        Vertex{.pos = { -v.x, +v.y }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
-        Vertex{.pos = { +v.x, -v.y }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
-        Vertex{.pos = { +v.x, +v.y }, .texcoord = { to.x + ts.x, to.y + ts.y }},
+        Vertex{.pos = { 0.f, 0.f }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
+        Vertex{.pos = { 0.f, v.y }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
+        Vertex{.pos = { v.x, 0.f }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
+        Vertex{.pos = { v.x, v.y }, .texcoord = { to.x + ts.x, to.y + ts.y }},
     };
     std::array<GLushort, 6> indices = {
         0, 1, 2,
@@ -256,11 +259,11 @@ struct Camera {
     glm::mat4 view;
 
     /// Create Orthographic Camera
-    static Camera create(float aspect_ratio) {
+    static Camera create(float aspect_ratio, float zoom) {
         auto canvas = glm::vec2(30.f, 30.f / aspect_ratio);
         return {
             .canvas = canvas,
-            .projection = glm::ortho(0.f, canvas.x, 0.f, canvas.y, +1.0f, -1.0f),
+            .projection = glm::ortho(0.f, canvas.x * zoom, 0.f, canvas.y * zoom, +1.0f, -1.0f),
             .view = glm::inverse(glm::mat4(1.0f)),
         };
     }
@@ -369,6 +372,10 @@ struct GameObject {
     std::optional<Aabb> aabb;
 };
 
+struct Map {
+    std::vector<std::vector<int>> tilemap;
+};
+
 /// Lists of all Game Objects in a Scene, divised in layers, in order of render
 struct ObjectLists {
     std::vector<GameObject> background;
@@ -395,231 +402,47 @@ struct Game {
     GLTextureRef white_texture;
     GLTextureRef black_texture;
     std::optional<Camera> camera;
+    std::optional<Map> map;
     std::optional<Scene> scene;
     std::optional<KeyStateMap> key_states;
     bool debug_grid;
     bool debug_aabb;
 };
 
+/// Load entire map
+Map load_map(const Game& game)
+{
+    Map map;
+    constexpr glm::uvec2 size{10.f, 10.f};
+    map.tilemap = std::vector(size.x, std::vector(size.y, 0));
+
+    return map;
+}
+
 /// Load Main Scene
 Scene load_scene(const Game& game)
 {
     Scene scene;
-    scene.bg_color = glm::vec4(glm::vec3(0xF8, 0xE0, 0xB0) / glm::vec3(255.f), 1.0f);
+    scene.bg_color = glm::vec4(glm::vec3(0x2E, 0x3E, 0x69) / glm::vec3(255.f), 1.0f);
 
-    // Backgrounds ============================================================
-    auto& backgrounds = scene.objects.background;
-    backgrounds.push_back({});
-    auto& snow_mountains = backgrounds.back();
-    snow_mountains.glo = game.canvas_quad_glo;
-    snow_mountains.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-mountain-snow.png"));
-    snow_mountains.transform.position = game.camera->canvas / glm::vec2(2.f);
-    snow_mountains.transform.scale = game.camera->canvas / glm::vec2(2.f);
-    snow_mountains.texture_slide = TextureSlide{
-        .velocity = glm::vec2(0.01f, 0.f),
-        .acceleration = glm::vec2(0.f),
-    };
-    snow_mountains.texture_offset = TextureOffset{};
-
-    backgrounds.push_back({});
-    auto& green_mountains = backgrounds.back();
-    green_mountains.glo = game.canvas_quad_glo;
-    green_mountains.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-mountain-green.png"));
-    green_mountains.transform.position = game.camera->canvas / glm::vec2(2.f);
-    green_mountains.transform.scale = game.camera->canvas / glm::vec2(2.f);
-    green_mountains.texture_slide = TextureSlide{
-        .velocity = glm::vec2(0.03f, 0.f),
-        .acceleration = glm::vec2(0.f),
-    };
-    green_mountains.texture_offset = TextureOffset{};
-
-    backgrounds.push_back({});
-    auto& clouds = backgrounds.back();
-    clouds.glo = game.canvas_quad_glo;
-    clouds.texture = std::make_shared<GLTexture>(*load_rgba_texture("bg-clouds.png"));
-    clouds.texture_slide = TextureSlide{
-        .velocity = glm::vec2(0.07f, 0.f),
-        .acceleration = glm::vec2(0.f),
-    };
-    clouds.texture_offset = TextureOffset{};
-    clouds.transform.position = game.camera->canvas / glm::vec2(2.f);
-    clouds.transform.scale = game.camera->canvas / glm::vec2(2.f);
-
-    // Platform Blocks ========================================================
-    GLTextureRef tileset_tex = std::make_shared<GLTexture>(*load_rgba_texture("tiles-2.png"));
-    constexpr glm::vec2 tileset_size = glm::vec2(339.f, 339.f);
-    constexpr glm::vec2 tile_normal_size = glm::vec2(16.f / 339.f);
-    constexpr glm::vec2 tile_offset_green_middle_top = glm::vec2(34.f, 221.f);
-    constexpr glm::vec2 tile_offset_green_middle_bottom = glm::vec2(34.f, 204.f);
-    constexpr glm::vec2 tile_offset_green_left_top = glm::vec2(0.f, 221.f);
-    constexpr glm::vec2 tile_offset_green_right_top = glm::vec2(68.f, 221.f);
-    constexpr glm::vec2 tile_offset_green_left_bottom = glm::vec2(0.f, 204.f);
-    constexpr glm::vec2 tile_offset_green_right_bottom = glm::vec2(68.f, 204.f);
+    constexpr glm::vec2 blocks_tileset_size{526.f, 232.f};
+    constexpr glm::vec2 blocks_tile_size{51.f, 59.f};
+    constexpr glm::vec2 blocks_grass_offset{1.f, 0.f};
+    GLTextureRef block_texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-blocks.png"));
 
     auto& platform = scene.objects.platform;
-
-    // Ground =================================================================
-    for (float i = 0; i < game.camera->canvas.x * 3; i++) {
-        platform.push_back({});
-        auto& tile_top = platform.back();
-        auto [tile_top_vertices, tile_top_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_middle_top / tileset_size, tile_normal_size);
-        tile_top.glo = std::make_shared<GLObject>(create_gl_object(tile_top_vertices.data(), tile_top_vertices.size(), tile_top_indices.data(), tile_top_indices.size()));
-        tile_top.texture = tileset_tex;
-        tile_top.transform.scale = glm::vec2(0.5f);
-        tile_top.transform.position = glm::vec2(tile_top.transform.scale.x + i, tile_top.transform.scale.y + 1.f);
-
-        platform.push_back({});
-        auto& tile_bottom = platform.back();
-        auto [tile_bottom_vertices, tile_bottom_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_middle_bottom / tileset_size, tile_normal_size);
-        tile_bottom.glo = std::make_shared<GLObject>(create_gl_object(tile_bottom_vertices.data(), tile_bottom_vertices.size(), tile_bottom_indices.data(), tile_bottom_indices.size()));
-        tile_bottom.texture = tileset_tex;
-        tile_bottom.transform.scale = glm::vec2(0.5f);
-        tile_bottom.transform.position = glm::vec2(tile_bottom.transform.scale.x + i, tile_bottom.transform.scale.y);
-    }
-
-    // Platf1 =================================================================
-    constexpr glm::vec2 platf1_offset = glm::vec2(20.f, 2.f);
-    {
-        platform.push_back({});
-        auto& tile_top_left = platform.back();
-        auto [tile_top_left_vertices, tile_top_left_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_left_top / tileset_size, tile_normal_size);
-        tile_top_left.glo = std::make_shared<GLObject>(create_gl_object(tile_top_left_vertices.data(), tile_top_left_vertices.size(), tile_top_left_indices.data(), tile_top_left_indices.size()));
-        tile_top_left.texture = tileset_tex;
-        tile_top_left.transform.scale = glm::vec2(0.5f);
-        tile_top_left.transform.position = glm::vec2(platf1_offset.x + tile_top_left.transform.scale.x, platf1_offset.y + tile_top_left.transform.scale.y + 2.f);
-
-        platform.push_back({});
-        auto& tile_middle_left = platform.back();
-        auto [tile_middle_left_vertices, tile_middle_left_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_left_bottom / tileset_size, tile_normal_size);
-        tile_middle_left.glo = std::make_shared<GLObject>(create_gl_object(tile_middle_left_vertices.data(), tile_middle_left_vertices.size(), tile_middle_left_indices.data(), tile_middle_left_indices.size()));
-        tile_middle_left.texture = tileset_tex;
-        tile_middle_left.transform.scale = glm::vec2(0.5f);
-        tile_middle_left.transform.position = glm::vec2(platf1_offset.x + tile_middle_left.transform.scale.x, platf1_offset.y + tile_middle_left.transform.scale.y + 1.f);
-
-        platform.push_back({});
-        auto& tile_bottom_left = platform.back();
-        auto [tile_bottom_left_vertices, tile_bottom_left_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_left_bottom / tileset_size, tile_normal_size);
-        tile_bottom_left.glo = std::make_shared<GLObject>(create_gl_object(tile_bottom_left_vertices.data(), tile_bottom_left_vertices.size(), tile_bottom_left_indices.data(), tile_bottom_left_indices.size()));
-        tile_bottom_left.texture = tileset_tex;
-        tile_bottom_left.transform.scale = glm::vec2(0.5f);
-        tile_bottom_left.transform.position = glm::vec2(platf1_offset.x + tile_bottom_left.transform.scale.x, platf1_offset.y + tile_bottom_left.transform.scale.y + 0.f);
-    }
-
-    for (float i = 1; i < 6; i++) {
-        {
+    for (size_t i = 0; i < game.map->tilemap.size(); i++) {
+        for (size_t j = 0; j < game.map->tilemap[i].size(); j++) {
             platform.push_back({});
-            auto& tile_top = platform.back();
-            auto [tile_vertices, tile_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_middle_top / tileset_size, tile_normal_size);
-            tile_top.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size(), tile_indices.data(), tile_indices.size()));
-            tile_top.texture = tileset_tex;
-            tile_top.transform.scale = glm::vec2(0.5f);
-            tile_top.transform.position = glm::vec2(platf1_offset.x + tile_top.transform.scale.x + i, platf1_offset.y + tile_top.transform.scale.y + 2.f);
-        }
-
-        {
-            platform.push_back({});
-            auto& tile_middle = platform.back();
-            auto [tile_vertices, tile_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_middle_bottom / tileset_size, tile_normal_size);
-            tile_middle.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size(), tile_indices.data(), tile_indices.size()));
-            tile_middle.texture = tileset_tex;
-            tile_middle.transform.scale = glm::vec2(0.5f);
-            tile_middle.transform.position = glm::vec2(platf1_offset.x + tile_middle.transform.scale.x + i, platf1_offset.y + tile_middle.transform.scale.y + 1.f);
-        }
-
-        {
-            platform.push_back({});
-            auto& tile_bottom = platform.back();
-            auto [tile_vertices, tile_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_middle_bottom / tileset_size, tile_normal_size);
-            tile_bottom.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size(), tile_indices.data(), tile_indices.size()));
-            tile_bottom.texture = tileset_tex;
-            tile_bottom.transform.scale = glm::vec2(0.5f);
-            tile_bottom.transform.position = glm::vec2(platf1_offset.x + tile_bottom.transform.scale.x + i, platf1_offset.y + tile_bottom.transform.scale.y + 0.f);
+            auto& obj = platform.back();
+            auto [vertices, indices] = gen_quad_geometry(glm::vec2(blocks_tile_size.x / blocks_tile_size.y, 1.0f), blocks_grass_offset / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
+            obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+            obj.texture = block_texture;
+            obj.transform.position.x = i * 0.5f + j * 0.5f;
+            obj.transform.position.y = i * 0.25f - j * 0.25f;
+            obj.transform.scale = glm::vec2(1.f);
         }
     }
-
-    {
-        {
-            platform.push_back({});
-            auto& tile_top_right = platform.back();
-            auto [tile_vertices, tile_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_right_top / tileset_size, tile_normal_size);
-            tile_top_right.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size(), tile_indices.data(), tile_indices.size()));
-            tile_top_right.texture = tileset_tex;
-            tile_top_right.transform.scale = glm::vec2(0.5f);
-            tile_top_right.transform.position = glm::vec2(platf1_offset.x + tile_top_right.transform.scale.x + 6, platf1_offset.y + tile_top_right.transform.scale.y + 2.f);
-        }
-
-        {
-            platform.push_back({});
-            auto& tile_middle_right = platform.back();
-            auto [tile_vertices, tile_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_right_bottom / tileset_size, tile_normal_size);
-            tile_middle_right.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size(), tile_indices.data(), tile_indices.size()));
-            tile_middle_right.texture = tileset_tex;
-            tile_middle_right.transform.scale = glm::vec2(0.5f);
-            tile_middle_right.transform.position = glm::vec2(platf1_offset.x + tile_middle_right.transform.scale.x + 6, platf1_offset.y + tile_middle_right.transform.scale.y + 1.f);
-        }
-
-        {
-            platform.push_back({});
-            auto& tile_bottom_right = platform.back();
-            auto [tile_vertices, tile_indices] = gen_quad_geometry(glm::vec2(1.f), tile_offset_green_right_bottom / tileset_size, tile_normal_size);
-            tile_bottom_right.glo = std::make_shared<GLObject>(create_gl_object(tile_vertices.data(), tile_vertices.size(), tile_indices.data(), tile_indices.size()));
-            tile_bottom_right.texture = tileset_tex;
-            tile_bottom_right.transform.scale = glm::vec2(0.5f);
-            tile_bottom_right.transform.position = glm::vec2(platf1_offset.x + tile_bottom_right.transform.scale.x + 6, platf1_offset.y + tile_bottom_right.transform.scale.y + 0.f);
-        }
-    }
-
-    // Platform AABBs
-    {   // groud
-        platform.push_back({});
-        auto& obj = platform.back();
-        auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
-        obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
-        obj.aabb = Aabb{ .min= {-1.f, -1.f}, .max = {+1.f, +0.99f} };
-        obj.transform.position = glm::vec2(game.map_size.x / 2.f, 1.f);
-        obj.transform.scale = glm::vec2(game.map_size.x / 2.f, 1.f);
-    }
-    {   // platf1
-        platform.push_back({});
-        auto& obj = platform.back();
-        auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
-        obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
-        obj.aabb = Aabb{ .min= {-0.98f, -1.f}, .max = {+0.98f, +0.99f} };
-        obj.transform.position = glm::vec2(23.5f, 4.75f);
-        obj.transform.scale = glm::vec2(3.5f, 0.25f);
-    }
-
-
-    // Entities ===============================================================
-    auto& entities = scene.objects.entity;
-    entities.push_back({});
-    auto& mario = entities.back();
-    constexpr glm::vec2 mario_spritesheet_size = glm::vec2(201.f, 120.f);
-    constexpr glm::vec2 mario_frame_size = glm::vec2(17.f, 29.f);
-    constexpr glm::vec2 mario_walk_offset = glm::vec2(0.f, 91.f);
-    constexpr glm::vec2 mario_jump_offset = glm::vec2(69.f, 91.f);
-    auto [mario_vertices, mario_indices] = gen_sprite_quads(2, glm::vec2(mario_frame_size.x/mario_frame_size.y, 1.f), mario_walk_offset / mario_spritesheet_size, (mario_frame_size * glm::vec2(2.f, 1.f)) / mario_spritesheet_size);
-    auto [mario_vertices2, mario_indices2] = gen_quad_geometry(glm::vec2(mario_frame_size.x/mario_frame_size.y, 1.f), mario_jump_offset / mario_spritesheet_size, mario_frame_size / mario_spritesheet_size); 
-    for (auto& i : mario_indices2) { i += mario_vertices.size(); }
-    mario_vertices.insert(mario_vertices.end(), mario_vertices2.begin(), mario_vertices2.end());
-    mario_indices.insert(mario_indices.end(), mario_indices2.begin(), mario_indices2.end());
-    mario.glo = std::make_shared<GLObject>(create_gl_object(mario_vertices.data(), mario_vertices.size(), mario_indices.data(), mario_indices.size()));
-    mario.texture = std::make_shared<GLTexture>(*load_rgba_texture("mario-3.png"));
-    mario.transform.scale = glm::vec2(1.2f);
-    mario.transform.position = glm::vec2(10.f, 2.f + mario.transform.scale.y);
-    mario.sprite_animation = SpriteAnimation{
-      .freeze = true,
-      .last_transit_dt = 0,
-      .curr_frame_idx = 0,
-      .frames = std::vector<SpriteFrame>{
-        { .duration = 0.10, .ebo_offset = 00, .ebo_count = 6, .next_frame_idx = 1 },
-        { .duration = 0.10, .ebo_offset = 12, .ebo_count = 6, .next_frame_idx = 0 },
-        { .duration = -0.1, .ebo_offset = 24, .ebo_count = 6, .next_frame_idx = 2 },
-      },
-    };
-    mario.aabb = Aabb{ .min= {-0.45f, -0.99f}, .max = {+0.45f, +0.8f} };
-    mario.gravity = Gravity{};
-    mario.entity_state = EntityState::IDLE;
 
     return scene;
 }
@@ -637,7 +460,8 @@ int game_init(Game& game, GLFWwindow* window)
     game.map_size = glm::vec2(90.f, 30.f);
     game.white_texture = std::make_shared<GLTexture>(*load_rgba_texture("white.png"));
     game.black_texture = std::make_shared<GLTexture>(*load_rgba_texture("black.png"));
-    game.camera = Camera::create(game.viewport.aspect_ratio());
+    game.camera = Camera::create(game.viewport.aspect_ratio(), 1.f);
+    game.map = load_map(game);
     game.scene = load_scene(game);
     game.key_states = KeyStateMap(GLFW_KEY_LAST);
     game.debug_grid = false;
@@ -717,6 +541,7 @@ void draw_object(const GLuint shader, const GLTexture& texture, const GLObject& 
     glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model));
     glm::vec2 texoffset_vec = texoffset ? texoffset->vec : glm::vec2(0.f);
     glUniform2fv(glGetUniformLocation(shader, "texoffset"), 1, glm::value_ptr(texoffset_vec));
+    glUniform4f(glGetUniformLocation(shader, "color"), 1.f, 1.f, 1.f, 1.f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     glBindVertexArray(glo.vao);
@@ -914,6 +739,17 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
+/// Handle Scrool wheel events
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
+{
+    auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
+    if (!game) return;
+
+    static float zoom{1.f};
+    zoom += yoffset * 0.1f;
+    game->camera = Camera::create(game->window.aspect_ratio(), zoom);
+}
+
 /// Handle Window framebuffer resize event
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
@@ -921,7 +757,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
     if (!game) return;
 
     glViewport(0, 0, width, height);
-    game->camera = Camera::create((float)width / (float)height);
+    game->camera = Camera::create((float)width / (float)height, 1.f);
 
     auto [quad_vertices, quad_indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2((float)width / (float)height, 1.0f));
     game->canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size(), quad_indices.data(), quad_indices.size()));
@@ -957,6 +793,7 @@ int create_window(GLFWwindow*& window)
     glfwSetKeyCallback(window, key_event_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetScrollCallback(window, scroll_callback);
     glfwSwapInterval(1); // vsync
     return 0;
 }

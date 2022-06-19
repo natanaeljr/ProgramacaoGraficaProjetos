@@ -52,7 +52,7 @@ find_package(Threads REQUIRED)
 # Main target binary
 add_executable(game)
 target_sources(game PRIVATE
-  supermario.cpp
+  mineiso.cpp
   stb_image.c
 )
 target_link_libraries(game PRIVATE
@@ -64,5 +64,5 @@ target_link_libraries(game PRIVATE
 )
 target_compile_definitions(game PRIVATE
   GLFW_INCLUDE_NONE
-  ASSETS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/super-mario-assets"
+  ASSETS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/mine-assets"
 )
