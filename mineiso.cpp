@@ -11,6 +11,7 @@
 #include <memory>
 #include <functional>
 #include <unordered_map>
+#include <thread>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -26,6 +27,7 @@
 #include "stb_image.h"
 
 using namespace std::string_literals;
+using namespace std::chrono_literals;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Settings
@@ -372,23 +374,31 @@ struct GameObject {
     std::optional<Aabb> aabb;
 };
 
+enum BlockIdx {
+    AIR = 0,
+    GRASS,
+    STONE,
+    WOOD,
+    WOODPLANK,
+};
+
 struct Map {
-    std::vector<std::vector<int>> tilemap;
+    glm::uvec3 size;
+    std::vector<std::vector<std::vector<BlockIdx>>> tilemap;
 };
 
 /// Lists of all Game Objects in a Scene, divised in layers, in order of render
 struct ObjectLists {
-    std::vector<GameObject> background;
-    std::vector<GameObject> platform;
     std::vector<GameObject> entity;
     /// Get all layers of objects
-    auto all_lists() { return std::array{ &background, &platform, &entity }; }
+    auto all_lists() { return std::array{ &entity }; }
 };
 
 /// Generic Scene structure
 struct Scene {
     ObjectLists objects;
     glm::vec4 bg_color;
+    std::vector<std::vector<std::vector<GameObject>>> platform;
     GameObject& player() { return objects.entity.front(); }
 };
 
@@ -414,11 +424,47 @@ struct Game {
 Map load_map(const Game& game)
 {
     Map map;
-    constexpr glm::uvec2 size{20.f, 20.f};
-    map.tilemap = std::vector(size.x, std::vector(size.y, 0));
+    map.size = {20, 20, 10};
+    map.tilemap = std::vector(map.size.x, std::vector(map.size.y, std::vector(map.size.z, BlockIdx::AIR)));
+
+    for (int i = 0; i < (int)map.tilemap.size(); i++) {
+        for (int j = 0; j < (int)map.tilemap[i].size(); j++) {
+            map.tilemap[i][j][0] = BlockIdx::GRASS;
+        }
+    }
+
+    // Add some randomness to the map
+    std::srand(time(nullptr));
+    //size_t i = std::rand() % 21;
+    //size_t j = std::rand() % 21;
+    size_t i = 10;
+    size_t j = 10;
+    map.tilemap[i][j][1] = BlockIdx::STONE;
+    map.tilemap[i][j][2] = BlockIdx::STONE;
+    map.tilemap[i][j][3] = BlockIdx::STONE;
+
+    map.tilemap[i][j+1][1] = BlockIdx::STONE;
+    map.tilemap[i][j+1][2] = BlockIdx::STONE;
+    map.tilemap[i][j+1][3] = BlockIdx::STONE;
+    map.tilemap[i-1][j+1][1] = BlockIdx::WOODPLANK;
+    map.tilemap[i-1][j+1][2] = BlockIdx::WOODPLANK;
+    map.tilemap[i-1][j+1][3] = BlockIdx::WOODPLANK;
+    map.tilemap[i-1][j][1] = BlockIdx::WOODPLANK;
+    map.tilemap[i-1][j][2] = BlockIdx::WOODPLANK;
+    map.tilemap[i-1][j][3] = BlockIdx::WOODPLANK;
 
     return map;
 }
+
+constexpr glm::vec2 blocks_tileset_size{526.f, 232.f};
+constexpr glm::vec2 blocks_tile_size{52.f, 58.f};
+
+static const std::unordered_map<BlockIdx, glm::vec2> blocks_offset = {
+    {BlockIdx::GRASS, {0.f, 0.f}},
+    {BlockIdx::STONE, {53.f, 0.f}},
+    {BlockIdx::WOODPLANK, {53.f, 116.f}},
+    {BlockIdx::WOOD, {0.f, 116.f}},
+};
 
 /// Load Main Scene
 Scene load_scene(const Game& game)
@@ -426,23 +472,26 @@ Scene load_scene(const Game& game)
     Scene scene;
     scene.bg_color = glm::vec4(glm::vec3(0x2E, 0x3E, 0x69) / glm::vec3(255.f), 1.0f);
 
-    constexpr glm::vec2 blocks_tileset_size{526.f, 232.f};
-    constexpr glm::vec2 blocks_tile_size{52.f, 58.f};
-    constexpr glm::vec2 blocks_grass_offset{0.f, 0.f};
     GLTextureRef block_texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-blocks.png"));
 
-    auto& platform = scene.objects.platform;
-    for (int i = game.map->tilemap.size()-1; i >= 0; i--) {
+    auto& platform = scene.platform;
+    for (int i = (int)game.map->tilemap.size()-1; i >= 0; i--) {
+        platform.resize(game.map->tilemap.size());
         for (int j = 0; j < (int)game.map->tilemap[i].size(); j++) {
-            platform.push_back({});
-            auto& obj = platform.back();
-            auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), blocks_grass_offset / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
-            obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
-            obj.texture = block_texture;
-            obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f);
-            obj.transform.position.y = i * 0.25f - j * 0.25f;
-            obj.transform.position.z = -obj.transform.position.y;
-            obj.transform.scale = glm::vec2(1.f);
+            platform[i].resize(game.map->tilemap[i].size());
+            for (int k = 0; k < (int)game.map->tilemap[i][j].size(); k++) {
+                platform[i][j].resize(game.map->tilemap[i][j].size());
+                BlockIdx block = game.map->tilemap[i][j][k];
+                if (block == BlockIdx::AIR) continue;
+                auto& obj = platform[i][j][k];
+                auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), blocks_offset.at(block) / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
+                obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+                obj.texture = block_texture;
+                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f);
+                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f;
+                obj.transform.position.z = -obj.transform.position.y + k;
+                obj.transform.scale = glm::vec2(1.f);
+            }
         }
     }
 
@@ -500,24 +549,24 @@ void game_update(Game& game, float dt)
     }
 
     // Collision system
-    {
-        auto& entities = game.scene->objects.entity;
-        for (auto entt = entities.begin(); entt != entities.end(); entt++) {
-            auto& tiles = game.scene->objects.platform;
-            for (auto& tile : tiles) {
-                Aabb tile_aabb = tile.aabb->transform(tile.transform.matrix());
-                Aabb entt_aabb = entt->aabb->transform(entt->transform.matrix());
-                if (collision(tile_aabb, entt_aabb)) {
-                    float y_top_diff = entt_aabb.max.y - tile_aabb.max.y;
-                    float y_bottom_diff = entt_aabb.min.y - tile_aabb.max.y;
-                    if (y_top_diff > 0.f && y_bottom_diff) {
-                        entt->transform.position.y += -y_bottom_diff;
-                        entt->motion.velocity.y = 0.f;
-                    }
-                }
-            }
-        }
-    }
+    //{
+        //auto& entities = game.scene->objects.entity;
+        //for (auto entt = entities.begin(); entt != entities.end(); entt++) {
+            //auto& tiles = game.scene->objects.platform;
+            //for (auto& tile : tiles) {
+                //Aabb tile_aabb = tile.aabb->transform(tile.transform.matrix());
+                //Aabb entt_aabb = entt->aabb->transform(entt->transform.matrix());
+                //if (collision(tile_aabb, entt_aabb)) {
+                    //float y_top_diff = entt_aabb.max.y - tile_aabb.max.y;
+                    //float y_bottom_diff = entt_aabb.min.y - tile_aabb.max.y;
+                    //if (y_top_diff > 0.f && y_bottom_diff) {
+                        //entt->transform.position.y += -y_bottom_diff;
+                        //entt->motion.velocity.y = 0.f;
+                    //}
+                //}
+            //}
+        //}
+    //}
 }
 
 /// Prepare to render
@@ -624,10 +673,24 @@ void game_render(Game& game)
     glUseProgram(shader);
     set_camera(shader, *game.camera);
 
+    for (int k = 0; k < game.map->size.z; k++) {
+        for (int i = game.map->size.x-1; i >=0 ; i--) {
+            for (int j = 0; j < game.map->size.y; j++) {
+                auto* obj = &game.scene->platform[i][j][k];
+                if (obj->glo && obj->texture) {
+                    auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
+                    draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite);
+                }
+            }
+        }
+    }
+
     for (auto* object_list : game.scene->objects.all_lists()) {
-        for (auto obj = object_list->begin(); obj != object_list->end() && obj->glo && obj->texture; obj++) {
-            auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
-            draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite);
+        for (auto obj = object_list->begin(); obj != object_list->end(); obj++) {
+            if (obj->glo && obj->texture) {
+                auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
+                draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite);
+            }
         }
     }
 
