@@ -40,13 +40,13 @@ GLuint load_shader_program()
 {
     const char* vertex_shader = R"(
 #version 410
-layout ( location = 0 ) in vec2 vPosition;
+layout ( location = 0 ) in vec3 vPosition;
 layout ( location = 1 ) in vec2 vTexCoord;
 uniform mat4 projection;
 uniform mat4 model;
 out vec2 texcoord;
 void main() {
-    gl_Position = projection * model * vec4 (vPosition, 0.0, 1.0f);
+    gl_Position = projection * model * vec4 (vPosition, 1.0f);
     texcoord = vTexCoord;
 }
 )";
@@ -83,7 +83,7 @@ void main(){
 
 /// Vertex data
 struct Vertex {
-    glm::vec2 pos;
+    glm::vec3 pos;
     glm::vec2 texcoord;
 };
 
@@ -126,10 +126,10 @@ GLObject create_gl_object(const Vertex vertices[], const size_t num_vertices, co
 constexpr auto gen_quad_geometry(glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std::tuple<std::array<Vertex, 4>, std::array<GLushort, 6>>
 {
     std::array<Vertex, 4> vertices = {
-        Vertex{.pos = { 0.f, 0.f }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
-        Vertex{.pos = { 0.f, v.y }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
-        Vertex{.pos = { v.x, 0.f }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
-        Vertex{.pos = { v.x, v.y }, .texcoord = { to.x + ts.x, to.y + ts.y }},
+        Vertex{.pos = { 0.f, 0.f, 0.0f }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
+        Vertex{.pos = { 0.f, v.y, 0.0f }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
+        Vertex{.pos = { v.x, 0.f, 0.0f }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
+        Vertex{.pos = { v.x, v.y, 0.0f }, .texcoord = { to.x + ts.x, to.y + ts.y }},
     };
     std::array<GLushort, 6> indices = {
         0, 1, 2,
@@ -156,10 +156,10 @@ auto gen_sprite_quads(size_t count, glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> 
     vertices.reserve(4 * count);
     indices.reserve(6 * count);
     for (size_t i = 0; i < count; i++) {
-        vertices.emplace_back(Vertex{ .pos = { -v.x, -v.y }, .texcoord = { to.x + (i+0)*offx, to.y + 0.0f } });
-        vertices.emplace_back(Vertex{ .pos = { -v.x, +v.y }, .texcoord = { to.x + (i+0)*offx, to.y + ts.y } });
-        vertices.emplace_back(Vertex{ .pos = { +v.x, -v.y }, .texcoord = { to.x + (i+1)*offx, to.y + 0.0f } });
-        vertices.emplace_back(Vertex{ .pos = { +v.x, +v.y }, .texcoord = { to.x + (i+1)*offx, to.y + ts.y } });
+        vertices.emplace_back(Vertex{ .pos = { -v.x, -v.y, 0.0f }, .texcoord = { to.x + (i+0)*offx, to.y + 0.0f } });
+        vertices.emplace_back(Vertex{ .pos = { -v.x, +v.y, 0.0f }, .texcoord = { to.x + (i+0)*offx, to.y + ts.y } });
+        vertices.emplace_back(Vertex{ .pos = { +v.x, -v.y, 0.0f }, .texcoord = { to.x + (i+1)*offx, to.y + 0.0f } });
+        vertices.emplace_back(Vertex{ .pos = { +v.x, +v.y, 0.0f }, .texcoord = { to.x + (i+1)*offx, to.y + ts.y } });
         for (auto v : {0, 1, 2, 2, 1, 3})
             indices.emplace_back(4*i+v);
     }
@@ -254,16 +254,16 @@ struct Viewport {
 
 /// Camera controller
 struct Camera {
-    glm::vec2 canvas;
+    glm::vec3 canvas;
     glm::mat4 projection;
     glm::mat4 view;
 
     /// Create Orthographic Camera
     static Camera create(float aspect_ratio, float zoom) {
-        auto canvas = glm::vec2(30.f, 30.f / aspect_ratio);
+        auto canvas = glm::vec3(20.f, 20.f / aspect_ratio, 1000.f);
         return {
             .canvas = canvas,
-            .projection = glm::ortho(0.f, canvas.x * zoom, 0.f, canvas.y * zoom, +1.0f, -1.0f),
+            .projection = glm::ortho(-canvas.x/2.f * zoom, +canvas.x/2.f * zoom, -canvas.y/2.f * zoom, +canvas.y/2.f * zoom, -canvas.z, +canvas.z),
             .view = glm::inverse(glm::mat4(1.0f)),
         };
     }
@@ -303,12 +303,12 @@ bool collision(const Aabb& a, const Aabb& b)
 
 /// Transform component
 struct Transform {
-    glm::vec2 position {0.0f};
+    glm::vec3 position {0.0f};
     glm::vec2 scale    {1.0f};
     glm::quat rotation {1.0f, glm::vec3(0.0f)};
 
     glm::mat4 matrix() {
-        glm::mat4 translation_mat = glm::translate(glm::mat4(1.0f), glm::vec3(position, 0.f));
+        glm::mat4 translation_mat = glm::translate(glm::mat4(1.0f), position);
         glm::mat4 rotation_mat = glm::toMat4(rotation);
         glm::mat4 scale_mat = glm::scale(glm::mat4(1.0f), glm::vec3(scale, 0.f));
         return translation_mat * rotation_mat * scale_mat;
@@ -317,8 +317,8 @@ struct Transform {
 
 /// Motion component
 struct Motion {
-    glm::vec2 velocity     {0.0f};
-    glm::vec2 acceleration {0.0f};
+    glm::vec3 velocity     {0.0f};
+    glm::vec3 acceleration {0.0f};
 };
 
 /// Gravity component
@@ -407,13 +407,14 @@ struct Game {
     std::optional<KeyStateMap> key_states;
     bool debug_grid;
     bool debug_aabb;
+    bool debug_triangles;
 };
 
 /// Load entire map
 Map load_map(const Game& game)
 {
     Map map;
-    constexpr glm::uvec2 size{10.f, 10.f};
+    constexpr glm::uvec2 size{20.f, 20.f};
     map.tilemap = std::vector(size.x, std::vector(size.y, 0));
 
     return map;
@@ -426,20 +427,21 @@ Scene load_scene(const Game& game)
     scene.bg_color = glm::vec4(glm::vec3(0x2E, 0x3E, 0x69) / glm::vec3(255.f), 1.0f);
 
     constexpr glm::vec2 blocks_tileset_size{526.f, 232.f};
-    constexpr glm::vec2 blocks_tile_size{51.f, 59.f};
-    constexpr glm::vec2 blocks_grass_offset{1.f, 0.f};
+    constexpr glm::vec2 blocks_tile_size{52.f, 58.f};
+    constexpr glm::vec2 blocks_grass_offset{0.f, 0.f};
     GLTextureRef block_texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-blocks.png"));
 
     auto& platform = scene.objects.platform;
-    for (size_t i = 0; i < game.map->tilemap.size(); i++) {
-        for (size_t j = 0; j < game.map->tilemap[i].size(); j++) {
+    for (int i = game.map->tilemap.size()-1; i >= 0; i--) {
+        for (int j = 0; j < (int)game.map->tilemap[i].size(); j++) {
             platform.push_back({});
             auto& obj = platform.back();
-            auto [vertices, indices] = gen_quad_geometry(glm::vec2(blocks_tile_size.x / blocks_tile_size.y, 1.0f), blocks_grass_offset / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
+            auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), blocks_grass_offset / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
             obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
             obj.texture = block_texture;
-            obj.transform.position.x = i * 0.5f + j * 0.5f;
+            obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f);
             obj.transform.position.y = i * 0.25f - j * 0.25f;
+            obj.transform.position.z = -obj.transform.position.y;
             obj.transform.scale = glm::vec2(1.f);
         }
     }
@@ -466,6 +468,7 @@ int game_init(Game& game, GLFWwindow* window)
     game.key_states = KeyStateMap(GLFW_KEY_LAST);
     game.debug_grid = false;
     game.debug_aabb = false;
+    game.debug_triangles = false;
 
     return 0;
 }
@@ -521,10 +524,11 @@ void game_update(Game& game, float dt)
 void begin_render(Game& game)
 {
     glEnable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     const glm::vec4& color = game.scene->bg_color;
     glClearColor(color.r, color.g, color.b, color.a);
-    glClear(GL_COLOR_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
 /// Upload camera matrix to shader
@@ -560,7 +564,7 @@ void render_grid(Game& game, GLuint shader)
     for (float i = 0; i < game.camera->canvas.x; i++) {
         for (float j = 0; j < game.camera->canvas.y; j++) {
             Transform transform;
-            transform.position = glm::vec2(0.5f + i, 0.5f + j);
+            transform.position = glm::vec3(0.5f + i, 0.5f + j, 0.0f);
             transform.scale = glm::vec2(0.5);
             draw_object(shader, *game.black_texture, glo, transform.matrix(), std::nullopt, std::nullopt);
         }
@@ -581,16 +585,32 @@ void render_aabbs(Game& game, GLuint shader)
             if (obj->aabb) {
                 Aabb& aabb = *obj->aabb;
                 auto vertices = std::vector<Vertex>{
-                    { .pos = { aabb.min.x, aabb.min.y }, .texcoord = { 1.0f, 0.0f } },
-                    { .pos = { aabb.min.x, aabb.max.y }, .texcoord = { 1.0f, 1.0f } },
-                    { .pos = { aabb.max.x, aabb.min.y }, .texcoord = { 0.0f, 1.0f } },
-                    { .pos = { aabb.max.x, aabb.max.y }, .texcoord = { 0.0f, 0.0f } },
+                    { .pos = { aabb.min.x, aabb.min.y, 0.0f }, .texcoord = { 1.0f, 0.0f } },
+                    { .pos = { aabb.min.x, aabb.max.y, 0.0f }, .texcoord = { 1.0f, 1.0f } },
+                    { .pos = { aabb.max.x, aabb.min.y, 0.0f }, .texcoord = { 0.0f, 1.0f } },
+                    { .pos = { aabb.max.x, aabb.max.y, 0.0f }, .texcoord = { 0.0f, 0.0f } },
                 };
                 //glBindVertexArray(bbox_glo.vao);
                 glBindBuffer(GL_ARRAY_BUFFER, glo.vbo);
                 glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
                 draw_object(shader, *game.white_texture, glo, obj->transform.matrix(), std::nullopt, std::nullopt);
             }
+        }
+    }
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
+
+/// Render triangles for all objects
+void render_triagles(Game& game, GLuint shader)
+{
+    glLineWidth(1.0f);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    for (auto* object_list : game.scene->objects.all_lists()) {
+        for (auto obj = object_list->rbegin(); obj != object_list->rend(); obj++) {
+            glBindVertexArray(obj->glo->vao);
+            Transform transform = obj->transform;
+            transform.position.z += 0.1f;
+            draw_object(shader, *game.black_texture, *obj->glo, transform.matrix(), std::nullopt, std::nullopt);
         }
     }
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -616,6 +636,9 @@ void game_render(Game& game)
 
     if (game.debug_grid)
         render_grid(game, shader);
+
+    if (game.debug_triangles)
+        render_triagles(game, shader);
 }
 
 /// Game Loop, only returns when game finishes
@@ -690,6 +713,12 @@ void key_space_handler(struct Game& game, int key, int action, int mods)
     }
 }
 
+void key_f5_handler(struct Game& game, int key, int action, int mods)
+{
+  if (action == GLFW_PRESS)
+    game.debug_triangles = !game.debug_triangles;
+}
+
 void key_f6_handler(struct Game& game, int key, int action, int mods)
 {
   if (action == GLFW_PRESS)
@@ -716,6 +745,9 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
     }
     else if (key == GLFW_KEY_SPACE) {
         key_space_handler(*game, key, action, mods);
+    }
+    else if (key == GLFW_KEY_F5) {
+        key_f5_handler(*game, key, action, mods);
     }
     else if (key == GLFW_KEY_F6) {
         key_f6_handler(*game, key, action, mods);
@@ -746,7 +778,7 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
     if (!game) return;
 
     static float zoom{1.f};
-    zoom += yoffset * 0.1f;
+    zoom += -yoffset * 0.05f;
     game->camera = Camera::create(game->window.aspect_ratio(), zoom);
 }
 
@@ -783,7 +815,7 @@ int create_window(GLFWwindow*& window)
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_RESIZABLE, GL_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 4);
-    window = glfwCreateWindow(WIDTH, HEIGHT, "Super Mario", nullptr, nullptr);
+    window = glfwCreateWindow(WIDTH, HEIGHT, "Mineiso", nullptr, nullptr);
     if (window == nullptr) {
         std::cerr << "Failed to create GLFW Window" << std::endl;
         glfwTerminate();
