@@ -42,13 +42,13 @@ GLuint load_shader_program()
 {
     const char* vertex_shader = R"(
 #version 410
-layout ( location = 0 ) in vec3 vPosition;
+layout ( location = 0 ) in vec2 vPosition;
 layout ( location = 1 ) in vec2 vTexCoord;
 uniform mat4 projection;
 uniform mat4 model;
 out vec2 texcoord;
 void main() {
-    gl_Position = projection * model * vec4 (vPosition, 1.0f);
+    gl_Position = projection * model * vec4(vPosition, 0.0f, 1.0f);
     texcoord = vTexCoord;
 }
 )";
@@ -85,7 +85,7 @@ void main(){
 
 /// Vertex data
 struct Vertex {
-    glm::vec3 pos;
+    glm::vec2 pos;
     glm::vec2 texcoord;
 };
 
@@ -111,7 +111,7 @@ GLObject create_gl_object(const Vertex vertices[], const size_t num_vertices, co
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, num_vertices * sizeof(Vertex), vertices, usage);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (GLvoid *)offsetof(Vertex, pos));
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (GLvoid *)offsetof(Vertex, pos));
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (GLvoid *)offsetof(Vertex, texcoord));
     glEnableVertexAttribArray(1);
@@ -128,10 +128,10 @@ GLObject create_gl_object(const Vertex vertices[], const size_t num_vertices, co
 constexpr auto gen_quad_geometry(glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std::tuple<std::array<Vertex, 4>, std::array<GLushort, 6>>
 {
     std::array<Vertex, 4> vertices = {
-        Vertex{.pos = { 0.f, 0.f, 0.0f }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
-        Vertex{.pos = { 0.f, v.y, 0.0f }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
-        Vertex{.pos = { v.x, 0.f, 0.0f }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
-        Vertex{.pos = { v.x, v.y, 0.0f }, .texcoord = { to.x + ts.x, to.y + ts.y }},
+        Vertex{.pos = { 0.f, 0.f }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
+        Vertex{.pos = { 0.f, v.y }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
+        Vertex{.pos = { v.x, 0.f }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
+        Vertex{.pos = { v.x, v.y }, .texcoord = { to.x + ts.x, to.y + ts.y }},
     };
     std::array<GLushort, 6> indices = {
         0, 1, 2,
@@ -158,10 +158,10 @@ auto gen_sprite_quads(size_t count, glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> 
     vertices.reserve(4 * count);
     indices.reserve(6 * count);
     for (size_t i = 0; i < count; i++) {
-        vertices.emplace_back(Vertex{ .pos = { -v.x, -v.y, 0.0f }, .texcoord = { to.x + (i+0)*offx, to.y + 0.0f } });
-        vertices.emplace_back(Vertex{ .pos = { -v.x, +v.y, 0.0f }, .texcoord = { to.x + (i+0)*offx, to.y + ts.y } });
-        vertices.emplace_back(Vertex{ .pos = { +v.x, -v.y, 0.0f }, .texcoord = { to.x + (i+1)*offx, to.y + 0.0f } });
-        vertices.emplace_back(Vertex{ .pos = { +v.x, +v.y, 0.0f }, .texcoord = { to.x + (i+1)*offx, to.y + ts.y } });
+        vertices.emplace_back(Vertex{ .pos = { -v.x, -v.y }, .texcoord = { to.x + (i+0)*offx, to.y + 0.0f } });
+        vertices.emplace_back(Vertex{ .pos = { -v.x, +v.y }, .texcoord = { to.x + (i+0)*offx, to.y + ts.y } });
+        vertices.emplace_back(Vertex{ .pos = { +v.x, -v.y }, .texcoord = { to.x + (i+1)*offx, to.y + 0.0f } });
+        vertices.emplace_back(Vertex{ .pos = { +v.x, +v.y }, .texcoord = { to.x + (i+1)*offx, to.y + ts.y } });
         for (auto v : {0, 1, 2, 2, 1, 3})
             indices.emplace_back(4*i+v);
     }
@@ -305,12 +305,12 @@ bool collision(const Aabb& a, const Aabb& b)
 
 /// Transform component
 struct Transform {
-    glm::vec3 position {0.0f};
+    glm::vec2 position {0.0f};
     glm::vec2 scale    {1.0f};
     glm::quat rotation {1.0f, glm::vec3(0.0f)};
 
     glm::mat4 matrix() {
-        glm::mat4 translation_mat = glm::translate(glm::mat4(1.0f), position);
+        glm::mat4 translation_mat = glm::translate(glm::mat4(1.0f), glm::vec3(position, 0.f));
         glm::mat4 rotation_mat = glm::toMat4(rotation);
         glm::mat4 scale_mat = glm::scale(glm::mat4(1.0f), glm::vec3(scale, 0.f));
         return translation_mat * rotation_mat * scale_mat;
@@ -319,8 +319,8 @@ struct Transform {
 
 /// Motion component
 struct Motion {
-    glm::vec3 velocity     {0.0f};
-    glm::vec3 acceleration {0.0f};
+    glm::vec2 velocity     {0.0f};
+    glm::vec2 acceleration {0.0f};
 };
 
 /// Gravity component
@@ -447,11 +447,11 @@ Map load_map(const Game& game)
     map.tilemap[i][j+1][1] = BlockIdx::STONE;
     map.tilemap[i][j+1][2] = BlockIdx::STONE;
     map.tilemap[i][j+1][3] = BlockIdx::STONE;
-    map.tilemap[i-1][j+1][1] = BlockIdx::WOODPLANK;
-    map.tilemap[i-1][j+1][2] = BlockIdx::WOODPLANK;
+    //map.tilemap[i-1][j+1][1] = BlockIdx::WOODPLANK;
+    //map.tilemap[i-1][j+1][2] = BlockIdx::WOODPLANK;
     map.tilemap[i-1][j+1][3] = BlockIdx::WOODPLANK;
-    map.tilemap[i-1][j][1] = BlockIdx::WOODPLANK;
-    map.tilemap[i-1][j][2] = BlockIdx::WOODPLANK;
+    //map.tilemap[i-1][j][1] = BlockIdx::WOODPLANK;
+    //map.tilemap[i-1][j][2] = BlockIdx::WOODPLANK;
     map.tilemap[i-1][j][3] = BlockIdx::WOODPLANK;
 
     return map;
@@ -476,7 +476,7 @@ Scene load_scene(const Game& game)
     GLTextureRef block_texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-blocks.png"));
 
     auto& platform = scene.platform;
-    for (int i = (int)game.map->tilemap.size()-1; i >= 0; i--) {
+    for (int i = 0; i < (int)game.map->tilemap.size(); i++) {
         platform.resize(game.map->tilemap.size());
         for (int j = 0; j < (int)game.map->tilemap[i].size(); j++) {
             platform[i].resize(game.map->tilemap[i].size());
@@ -490,7 +490,6 @@ Scene load_scene(const Game& game)
                 obj.texture = block_texture;
                 obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f);
                 obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f;
-                obj.transform.position.z = -obj.transform.position.y + k * 0.6f;
                 obj.transform.scale = glm::vec2(1.f);
             }
         }
@@ -503,7 +502,6 @@ Scene load_scene(const Game& game)
         obj.transform.scale = glm::vec2(0.7f);
         obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
         obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
-        obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
         obj.texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-steve.png"));
         //constexpr glm::vec2 sprite_size = {307.f, 72.f};
         constexpr glm::vec2 sprite_frame_size = {38.f, 72.f};
@@ -579,37 +577,16 @@ void game_update(Game& game, float dt)
             }
         }
     }
-
-    // Collision system
-    //{
-        //auto& entities = game.scene->objects.entity;
-        //for (auto entt = entities.begin(); entt != entities.end(); entt++) {
-            //auto& tiles = game.scene->objects.platform;
-            //for (auto& tile : tiles) {
-                //Aabb tile_aabb = tile.aabb->transform(tile.transform.matrix());
-                //Aabb entt_aabb = entt->aabb->transform(entt->transform.matrix());
-                //if (collision(tile_aabb, entt_aabb)) {
-                    //float y_top_diff = entt_aabb.max.y - tile_aabb.max.y;
-                    //float y_bottom_diff = entt_aabb.min.y - tile_aabb.max.y;
-                    //if (y_top_diff > 0.f && y_bottom_diff) {
-                        //entt->transform.position.y += -y_bottom_diff;
-                        //entt->motion.velocity.y = 0.f;
-                    //}
-                //}
-            //}
-        //}
-    //}
 }
 
 /// Prepare to render
 void begin_render(Game& game)
 {
     glEnable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     const glm::vec4& color = game.scene->bg_color;
     glClearColor(color.r, color.g, color.b, color.a);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT);
 }
 
 /// Upload camera matrix to shader
@@ -666,10 +643,10 @@ void render_aabbs(Game& game, GLuint shader)
             if (obj->aabb) {
                 Aabb& aabb = *obj->aabb;
                 auto vertices = std::vector<Vertex>{
-                    { .pos = { aabb.min.x, aabb.min.y, 0.0f }, .texcoord = { 1.0f, 0.0f } },
-                    { .pos = { aabb.min.x, aabb.max.y, 0.0f }, .texcoord = { 1.0f, 1.0f } },
-                    { .pos = { aabb.max.x, aabb.min.y, 0.0f }, .texcoord = { 0.0f, 1.0f } },
-                    { .pos = { aabb.max.x, aabb.max.y, 0.0f }, .texcoord = { 0.0f, 0.0f } },
+                    { .pos = { aabb.min.x, aabb.min.y }, .texcoord = { 1.0f, 0.0f } },
+                    { .pos = { aabb.min.x, aabb.max.y }, .texcoord = { 1.0f, 1.0f } },
+                    { .pos = { aabb.max.x, aabb.min.y }, .texcoord = { 0.0f, 1.0f } },
+                    { .pos = { aabb.max.x, aabb.max.y }, .texcoord = { 0.0f, 0.0f } },
                 };
                 //glBindVertexArray(bbox_glo.vao);
                 glBindBuffer(GL_ARRAY_BUFFER, glo.vbo);
@@ -690,7 +667,6 @@ void render_triagles(Game& game, GLuint shader)
         for (auto obj = object_list->rbegin(); obj != object_list->rend(); obj++) {
             glBindVertexArray(obj->glo->vao);
             Transform transform = obj->transform;
-            transform.position.z += 0.1f;
             draw_object(shader, *game.black_texture, *obj->glo, transform.matrix(), std::nullopt, std::nullopt);
         }
     }
@@ -768,46 +744,50 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         if (key == GLFW_KEY_UP) {
             int i = game.scene->player_idx.x + 1, j = game.scene->player_idx.y, k = game.scene->player_idx.z;
-            if (i < game.map->size.x && !game.scene->platform[i][j][k].glo) {
-                game.scene->player_idx.x = i;
-                auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i-1][j][k]);
-                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
-                obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
-                obj.sprite_animation->curr_frame_idx = 3;
+            game.scene->platform[i-1][j][k].sprite_animation->curr_frame_idx = 3;
+            if (i < (int)game.map->size.x ) {
+                if (!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) {
+                    game.scene->player_idx.x = i;
+                    auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i-1][j][k]);
+                    obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                }
             }
         }
         else if (key == GLFW_KEY_DOWN) {
             int i = game.scene->player_idx.x - 1, j = game.scene->player_idx.y, k = game.scene->player_idx.z;
-            if (i >= 0 && !game.scene->platform[i][j][k].glo) {
-                game.scene->player_idx.x = i;
-                auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i+1][j][k]);
-                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
-                obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
-                obj.sprite_animation->curr_frame_idx = 1;
+            game.scene->platform[i+1][j][k].sprite_animation->curr_frame_idx = 1;
+            if (i >= 0) {
+                if (!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) {
+                    game.scene->player_idx.x = i;
+                    auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i+1][j][k]);
+                    obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                }
             }
         }
         else if (key == GLFW_KEY_RIGHT) {
             int i = game.scene->player_idx.x, j = game.scene->player_idx.y + 1, k = game.scene->player_idx.z;
-            if (j < game.map->size.y && !game.scene->platform[i][j][k].glo) {
-                game.scene->player_idx.y = j;
-                auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j-1][k]);
-                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
-                obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
-                obj.sprite_animation->curr_frame_idx = 0;
+            game.scene->platform[i][j-1][k].sprite_animation->curr_frame_idx = 0;
+            if (j < (int)game.map->size.y) {
+                if (!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) {
+                    game.scene->player_idx.y = j;
+                    auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j-1][k]);
+                    obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                }
             }
         }
         else if (key == GLFW_KEY_LEFT) {
             int i = game.scene->player_idx.x, j = game.scene->player_idx.y - 1, k = game.scene->player_idx.z;
-            if (j >= 0 && !game.scene->platform[i][j][k].glo) {
-                game.scene->player_idx.y = j;
-                auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j+1][k]);
-                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
-                obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
-                obj.sprite_animation->curr_frame_idx = 2;
+            game.scene->platform[i][j+1][k].sprite_animation->curr_frame_idx = 2;
+            if (j >= 0) {
+                if (!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) {
+                    game.scene->player_idx.y = j;
+                    auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j+1][k]);
+                    obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                }
             }
         }
     }
