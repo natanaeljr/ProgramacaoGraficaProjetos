@@ -489,11 +489,41 @@ Scene load_scene(const Game& game)
                 obj.texture = block_texture;
                 obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f);
                 obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f;
-                obj.transform.position.z = -obj.transform.position.y + k;
+                obj.transform.position.z = -obj.transform.position.y + k * 0.6f;
                 obj.transform.scale = glm::vec2(1.f);
             }
         }
     }
+
+    { // Player Steve
+        int i = 11, j = 11, k = 1;
+        auto& obj = platform[i][j][k];
+        obj.transform.scale = glm::vec2(0.7f);
+        obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+        obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+        obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
+        obj.texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-steve.png"));
+        //constexpr glm::vec2 sprite_size = {307.f, 72.f};
+        constexpr glm::vec2 sprite_frame_size = {38.f, 72.f};
+        auto [vertices, indices] = gen_sprite_quads(8, glm::vec2(sprite_frame_size.x / sprite_frame_size.y, 1.f), glm::vec2(0.f), glm::vec2(1.f));
+        obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+        obj.sprite_animation = SpriteAnimation{
+          .freeze = true,
+          .last_transit_dt = 0,
+          .curr_frame_idx = 0,
+          .frames = std::vector<SpriteFrame>{
+            { .duration = -0.10, .ebo_offset = 00, .ebo_count = 6, .next_frame_idx = 0 },
+            { .duration = -0.10, .ebo_offset = 12, .ebo_count = 6, .next_frame_idx = 0 },
+            { .duration = -0.10, .ebo_offset = 24, .ebo_count = 6, .next_frame_idx = 0 },
+            { .duration = -0.10, .ebo_offset = 36, .ebo_count = 6, .next_frame_idx = 0 },
+            { .duration = -0.10, .ebo_offset = 48, .ebo_count = 6, .next_frame_idx = 0 },
+            { .duration = -0.10, .ebo_offset = 60, .ebo_count = 6, .next_frame_idx = 0 },
+            { .duration = -0.10, .ebo_offset = 72, .ebo_count = 6, .next_frame_idx = 0 },
+            { .duration = -0.10, .ebo_offset = 84, .ebo_count = 6, .next_frame_idx = 0 },
+          },
+        };
+    }
+
 
     return scene;
 }
@@ -673,9 +703,9 @@ void game_render(Game& game)
     glUseProgram(shader);
     set_camera(shader, *game.camera);
 
-    for (int k = 0; k < game.map->size.z; k++) {
         for (int i = game.map->size.x-1; i >=0 ; i--) {
-            for (int j = 0; j < game.map->size.y; j++) {
+            for (int j = 0; j < (int)game.map->size.y; j++) {
+    for (int k = 0; k < (int)game.map->size.z; k++) {
                 auto* obj = &game.scene->platform[i][j][k];
                 if (obj->glo && obj->texture) {
                     auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
