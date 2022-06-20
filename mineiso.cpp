@@ -399,6 +399,7 @@ struct Scene {
     ObjectLists objects;
     glm::vec4 bg_color;
     std::vector<std::vector<std::vector<GameObject>>> platform;
+    glm::uvec3 player_idx;
     GameObject& player() { return objects.entity.front(); }
 };
 
@@ -437,8 +438,8 @@ Map load_map(const Game& game)
     std::srand(time(nullptr));
     //size_t i = std::rand() % 21;
     //size_t j = std::rand() % 21;
-    size_t i = 10;
-    size_t j = 10;
+    size_t i = 5;
+    size_t j = 8;
     map.tilemap[i][j][1] = BlockIdx::STONE;
     map.tilemap[i][j][2] = BlockIdx::STONE;
     map.tilemap[i][j][3] = BlockIdx::STONE;
@@ -496,7 +497,8 @@ Scene load_scene(const Game& game)
     }
 
     { // Player Steve
-        int i = 11, j = 11, k = 1;
+        int i = game.map->size.x/2, j = game.map->size.y/2, k = 1;
+        scene.player_idx = glm::vec3(i, j, k);
         auto& obj = platform[i][j][k];
         obj.transform.scale = glm::vec2(0.7f);
         obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
@@ -619,12 +621,12 @@ void set_camera(const GLuint shader, const Camera& camera)
 
 /// Render a textured GLObject
 void draw_object(const GLuint shader, const GLTexture& texture, const GLObject& glo, const glm::mat4& model,
-                 const std::optional<TextureOffset> texoffset, const std::optional<SpriteFrame> sprite)
+                 const std::optional<TextureOffset> texoffset, const std::optional<SpriteFrame> sprite, const glm::vec4 color = glm::vec4(1.f))
 {
     glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model));
     glm::vec2 texoffset_vec = texoffset ? texoffset->vec : glm::vec2(0.f);
     glUniform2fv(glGetUniformLocation(shader, "texoffset"), 1, glm::value_ptr(texoffset_vec));
-    glUniform4f(glGetUniformLocation(shader, "color"), 1.f, 1.f, 1.f, 1.f);
+    glUniform4fv(glGetUniformLocation(shader, "color"), 1, glm::value_ptr(color));
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     glBindVertexArray(glo.vao);
@@ -703,13 +705,16 @@ void game_render(Game& game)
     glUseProgram(shader);
     set_camera(shader, *game.camera);
 
-        for (int i = game.map->size.x-1; i >=0 ; i--) {
-            for (int j = 0; j < (int)game.map->size.y; j++) {
-    for (int k = 0; k < (int)game.map->size.z; k++) {
+    for (int i = game.map->size.x-1; i >=0 ; i--) {
+        for (int j = 0; j < (int)game.map->size.y; j++) {
+            for (int k = 0; k < (int)game.map->size.z; k++) {
                 auto* obj = &game.scene->platform[i][j][k];
                 if (obj->glo && obj->texture) {
+                    //transperency
+                    //auto color = (k > 0 && glm::uvec3(i, j, k) != game.scene->player_idx) ? glm::vec4(glm::vec3(1.0f), 0.6f) : glm::vec4(1.f);
+                    auto color = glm::vec4(1.f);
                     auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
-                    draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite);
+                    draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite, color);
                 }
             }
         }
@@ -758,32 +763,51 @@ int game_loop(GLFWwindow* window)
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Events
 
-void key_left_right_handler(struct Game& game, int key, int action, int mods)
+void key_arrows_handler(struct Game& game, int key, int action, int mods)
 {
-    assert(key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT);
-    const float direction = (key == GLFW_KEY_LEFT ? -1.f : +1.f);
-
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        game.scene->player().motion.velocity.x = 8.f * direction;
-        game.scene->player().transform.scale.x = 1.2f * direction;
-        if (game.scene->player().entity_state == EntityState::IDLE) {
-            game.scene->player().sprite_animation->freeze = false;
-            game.scene->player().entity_state = EntityState::WALKING;
+        if (key == GLFW_KEY_UP) {
+            int i = game.scene->player_idx.x + 1, j = game.scene->player_idx.y, k = game.scene->player_idx.z;
+            if (i < game.map->size.x && !game.scene->platform[i][j][k].glo) {
+                game.scene->player_idx.x = i;
+                auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i-1][j][k]);
+                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
+                obj.sprite_animation->curr_frame_idx = 3;
+            }
         }
-    }
-    else if (action == GLFW_RELEASE) {
-        const int other_key = (key == GLFW_KEY_LEFT) ? GLFW_KEY_RIGHT : GLFW_KEY_LEFT;
-        if (game.key_states.value()[other_key]) {
-            // revert to opposite key's movement
-            key_left_right_handler(game, other_key, GLFW_REPEAT, mods);
-        } else {
-            // both arrow keys release, cease movement
-            game.scene->player().motion.velocity.x = 0.0f;
-            game.scene->player().motion.acceleration.x = 0.0f;
-            if (game.scene->player().entity_state == EntityState::WALKING) {
-                game.scene->player().entity_state = EntityState::IDLE;
-                game.scene->player().sprite_animation->freeze = true;
-                game.scene->player().sprite_animation->curr_frame_idx = 0;
+        else if (key == GLFW_KEY_DOWN) {
+            int i = game.scene->player_idx.x - 1, j = game.scene->player_idx.y, k = game.scene->player_idx.z;
+            if (i >= 0 && !game.scene->platform[i][j][k].glo) {
+                game.scene->player_idx.x = i;
+                auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i+1][j][k]);
+                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
+                obj.sprite_animation->curr_frame_idx = 1;
+            }
+        }
+        else if (key == GLFW_KEY_RIGHT) {
+            int i = game.scene->player_idx.x, j = game.scene->player_idx.y + 1, k = game.scene->player_idx.z;
+            if (j < game.map->size.y && !game.scene->platform[i][j][k].glo) {
+                game.scene->player_idx.y = j;
+                auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j-1][k]);
+                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
+                obj.sprite_animation->curr_frame_idx = 0;
+            }
+        }
+        else if (key == GLFW_KEY_LEFT) {
+            int i = game.scene->player_idx.x, j = game.scene->player_idx.y - 1, k = game.scene->player_idx.z;
+            if (j >= 0 && !game.scene->platform[i][j][k].glo) {
+                game.scene->player_idx.y = j;
+                auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j+1][k]);
+                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                obj.transform.position.z = -obj.transform.position.y + k + 0.5f;
+                obj.sprite_animation->curr_frame_idx = 2;
             }
         }
     }
@@ -833,8 +857,8 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(game->window.glfw, 1);
     }
-    else if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT) {
-        key_left_right_handler(*game, key, action, mods);
+    else if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT || key == GLFW_KEY_UP || key == GLFW_KEY_DOWN) {
+        key_arrows_handler(*game, key, action, mods);
     }
     else if (key == GLFW_KEY_SPACE) {
         key_space_handler(*game, key, action, mods);
