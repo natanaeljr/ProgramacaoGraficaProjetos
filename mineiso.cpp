@@ -21,6 +21,7 @@
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/ext/quaternion_transform.hpp>
 
@@ -32,7 +33,7 @@ using namespace std::chrono_literals;
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Settings
 
-constexpr size_t WIDTH = 900, HEIGHT = 600;
+constexpr size_t WIDTH = 900, HEIGHT = 500;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Shader
@@ -345,6 +346,10 @@ enum class EntityState {
     JUMPING,
 };
 
+/// Highlight component
+struct Highlight {
+};
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Forward-declarations
 
@@ -372,6 +377,7 @@ struct GameObject {
     std::optional<EntityState> entity_state;
     std::optional<Gravity> gravity;
     std::optional<Aabb> aabb;
+    std::optional<Highlight> highlight;
 };
 
 enum BlockIdx {
@@ -400,6 +406,7 @@ struct Scene {
     glm::vec4 bg_color;
     std::vector<std::vector<std::vector<GameObject>>> platform;
     glm::uvec3 player_idx;
+    std::optional<glm::uvec3> highlight_idx;
     GameObject& player() { return objects.entity.front(); }
 };
 
@@ -407,6 +414,7 @@ struct Scene {
 struct Game {
     Window window;
     Viewport viewport;
+    glm::vec2 cursor;
     GLuint shader_program;
     GLObjectRef canvas_quad_glo;
     glm::vec2 map_size;
@@ -535,6 +543,7 @@ int game_init(Game& game, GLFWwindow* window)
     game.window.size = glm::uvec2(WIDTH, HEIGHT);
     game.viewport.size = glm::uvec2(WIDTH, HEIGHT);
     game.viewport.offset = glm::uvec2(0);
+    game.cursor = glm::vec2(0.f);
     game.shader_program = load_shader_program();
     auto [quad_vertices, quad_indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2((float)WIDTH / (float)HEIGHT, 1.0f));
     game.canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size(), quad_indices.data(), quad_indices.size()));
@@ -689,6 +698,8 @@ void game_render(Game& game)
                     //transperency
                     //auto color = (k > 0 && glm::uvec3(i, j, k) != game.scene->player_idx) ? glm::vec4(glm::vec3(1.0f), 0.6f) : glm::vec4(1.f);
                     auto color = glm::vec4(1.f);
+                    if (obj->highlight)
+                        color = glm::vec4(glm::vec3(0.65f), 1.f);
                     auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
                     draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite, color);
                 }
@@ -868,6 +879,68 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
+
+//glm::vec2 normalized_cursor_pos(glm::vec2 cursor, glm::uvec2 viewport_size)
+//{
+    //float aspect_ratio = (float)viewport_size.y / (float)viewport_size.x;
+    //float normal_max_width = 2.f;
+    //float normal_max_height = 2.f * aspect_ratio;
+    //float x = ((cursor.x * normal_max_width) / viewport_size.x) - 1.f;
+    //float y = ((cursor.y * -normal_max_height) / viewport_size.y) + aspect_ratio;
+    //return {x, y};
+//}
+
+/// Handle cursor movement events
+void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
+{
+    auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
+    if (!game) return;
+    game->cursor.x = (float)xpos;
+    game->cursor.y = (float)ypos;
+
+    //glm::vec2 n = normalized_cursor_pos({xpos, ypos}, game->window.size);
+    //printf("nx %f ny %f ", n.x, n.y);
+
+    //glm::mat4 proj = glm::inverse(game->camera->projection);
+    //auto m1 = proj * glm::translate(glm::mat4(1.0f), glm::vec3(n, 0.f));
+
+    //glm::mat4 transformation = m1;
+    //glm::vec3 scale;
+    //glm::quat rotation;
+    //glm::vec3 translation;
+    //glm::vec3 skew;
+    //glm::vec4 perspective;
+    //glm::decompose(transformation, scale, rotation, translation, skew,perspective);
+    //glm::vec2 n2 = translation;
+    //printf("n2x %f n2y %f\n", n2.x, n2.y);
+
+    ypos = game->window.size.y - ypos;
+    float nypos = ypos / game->window.size.y;
+    float nxpos = xpos / game->window.size.x;
+    int i = nypos * 0.25f - nxpos * 0.25f;
+    int j = nxpos + nypos;
+    int k = 0;
+    printf("nxpos %f nypos %f i %d j %d k %d\n", nxpos, nypos, i, j, k);
+
+    float cxpos = nxpos * game->camera->canvas.x - (game->camera->canvas.x / 2.f);
+    float cypos = nypos * game->camera->canvas.y - (game->camera->canvas.y / 2.f);
+    i = cxpos + 2.f*cypos + game->map->size.x/2.f;
+    j = i - 4 * cypos;
+    printf("cxpos %f cypos %f i %d j %d k %d\n", cxpos, cypos, i, j, k);
+
+    if (i >= 0 && i < 20 && j >= 0 && j < 20 && k >= 0 && k < 10) {
+        if (game->scene->highlight_idx) {
+            glm::uvec3 v = *game->scene->highlight_idx;
+            game->scene->platform[v.x][v.y][v.z].highlight = std::nullopt;
+        }
+        game->scene->platform[i][j][k].highlight = Highlight{};
+        game->scene->highlight_idx = {i, j, k};
+    }
+
+    //obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f);
+    //obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f;
+}
+
 /// Handle Scrool wheel events
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 {
@@ -921,6 +994,7 @@ int create_window(GLFWwindow*& window)
     glfwMakeContextCurrent(window);
     glfwSetKeyCallback(window, key_event_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
+    glfwSetCursorPosCallback(window, cursor_position_callback);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetScrollCallback(window, scroll_callback);
     glfwSwapInterval(1); // vsync
