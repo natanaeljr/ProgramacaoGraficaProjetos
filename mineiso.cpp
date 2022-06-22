@@ -129,10 +129,10 @@ GLObject create_gl_object(const Vertex vertices[], const size_t num_vertices, co
 constexpr auto gen_quad_geometry(glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std::tuple<std::array<Vertex, 4>, std::array<GLushort, 6>>
 {
     std::array<Vertex, 4> vertices = {
-        Vertex{.pos = { 0.f, 0.f }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
-        Vertex{.pos = { 0.f, v.y }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
-        Vertex{.pos = { v.x, 0.f }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
-        Vertex{.pos = { v.x, v.y }, .texcoord = { to.x + ts.x, to.y + ts.y }},
+        Vertex{.pos = { 0.f,  0.f }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
+        Vertex{.pos = { 0.f, -v.y }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
+        Vertex{.pos = { v.x,  0.f }, .texcoord = { to.x + ts.x, to.y + ts.y }},
+        Vertex{.pos = { v.x, -v.y }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
     };
     std::array<GLushort, 6> indices = {
         0, 1, 2,
@@ -257,7 +257,7 @@ struct Viewport {
 
 /// Camera controller
 struct Camera {
-    glm::vec3 canvas;
+    glm::vec3 canvas_size;
     glm::mat4 projection;
     glm::mat4 view;
 
@@ -265,7 +265,7 @@ struct Camera {
     static Camera create(float aspect_ratio, float zoom) {
         auto canvas = glm::vec3(20.f, 20.f / aspect_ratio, 1000.f);
         return {
-            .canvas = canvas,
+            .canvas_size = canvas,
             .projection = glm::ortho(-canvas.x/2.f * zoom, +canvas.x/2.f * zoom, -canvas.y/2.f * zoom, +canvas.y/2.f * zoom, -canvas.z, +canvas.z),
             .view = glm::inverse(glm::mat4(1.0f)),
         };
@@ -417,7 +417,6 @@ struct Game {
     glm::vec2 cursor;
     GLuint shader_program;
     GLObjectRef canvas_quad_glo;
-    glm::vec2 map_size;
     GLTextureRef white_texture;
     GLTextureRef black_texture;
     std::optional<Camera> camera;
@@ -547,7 +546,6 @@ int game_init(Game& game, GLFWwindow* window)
     game.shader_program = load_shader_program();
     auto [quad_vertices, quad_indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2((float)WIDTH / (float)HEIGHT, 1.0f));
     game.canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size(), quad_indices.data(), quad_indices.size()));
-    game.map_size = glm::vec2(90.f, 30.f);
     game.white_texture = std::make_shared<GLTexture>(*load_rgba_texture("white.png"));
     game.black_texture = std::make_shared<GLTexture>(*load_rgba_texture("black.png"));
     game.camera = Camera::create(game.viewport.aspect_ratio(), 1.f);
@@ -628,8 +626,8 @@ void render_grid(Game& game, GLuint shader)
     auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
     GLObject glo = create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size());
     glBindVertexArray(glo.vao);
-    for (float i = 0; i < game.camera->canvas.x; i++) {
-        for (float j = 0; j < game.camera->canvas.y; j++) {
+    for (float i = 0; i < game.camera->canvas_size.x; i++) {
+        for (float j = 0; j < game.camera->canvas_size.y; j++) {
             Transform transform;
             transform.position = glm::vec3(0.5f + i, 0.5f + j, 0.0f);
             transform.scale = glm::vec2(0.5);
@@ -879,56 +877,25 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
-
-//glm::vec2 normalized_cursor_pos(glm::vec2 cursor, glm::uvec2 viewport_size)
-//{
-    //float aspect_ratio = (float)viewport_size.y / (float)viewport_size.x;
-    //float normal_max_width = 2.f;
-    //float normal_max_height = 2.f * aspect_ratio;
-    //float x = ((cursor.x * normal_max_width) / viewport_size.x) - 1.f;
-    //float y = ((cursor.y * -normal_max_height) / viewport_size.y) + aspect_ratio;
-    //return {x, y};
-//}
-
 /// Handle cursor movement events
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
 {
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
-    game->cursor.x = (float)xpos;
-    game->cursor.y = (float)ypos;
-
-    //glm::vec2 n = normalized_cursor_pos({xpos, ypos}, game->window.size);
-    //printf("nx %f ny %f ", n.x, n.y);
-
-    //glm::mat4 proj = glm::inverse(game->camera->projection);
-    //auto m1 = proj * glm::translate(glm::mat4(1.0f), glm::vec3(n, 0.f));
-
-    //glm::mat4 transformation = m1;
-    //glm::vec3 scale;
-    //glm::quat rotation;
-    //glm::vec3 translation;
-    //glm::vec3 skew;
-    //glm::vec4 perspective;
-    //glm::decompose(transformation, scale, rotation, translation, skew,perspective);
-    //glm::vec2 n2 = translation;
-    //printf("n2x %f n2y %f\n", n2.x, n2.y);
+    game->cursor = {xpos, ypos};
 
     ypos = game->window.size.y - ypos;
-    float nypos = ypos / game->window.size.y;
-    float nxpos = xpos / game->window.size.x;
-    int i = nypos * 0.25f - nxpos * 0.25f;
-    int j = nxpos + nypos;
+    glm::vec2 cursor_pos{xpos, ypos};
+    glm::vec2 normal_pos = cursor_pos / glm::vec2(game->window.size);
+    glm::vec2 canvas_pos = normal_pos * glm::vec2(game->camera->canvas_size) - glm::vec2(game->camera->canvas_size) / 2.f;
+
+    // cartesian to isometric
+    int i = canvas_pos.x + 2.f * canvas_pos.y + game->map->size.x / 2.f;
+    int j = i - 4.f * canvas_pos.y;
     int k = 0;
-    printf("nxpos %f nypos %f i %d j %d k %d\n", nxpos, nypos, i, j, k);
 
-    float cxpos = nxpos * game->camera->canvas.x - (game->camera->canvas.x / 2.f);
-    float cypos = nypos * game->camera->canvas.y - (game->camera->canvas.y / 2.f);
-    i = cxpos + 2.f*cypos + game->map->size.x/2.f;
-    j = i - 4 * cypos;
-    printf("cxpos %f cypos %f i %d j %d k %d\n", cxpos, cypos, i, j, k);
-
-    if (i >= 0 && i < 20 && j >= 0 && j < 20 && k >= 0 && k < 10) {
+    glm::ivec3 mapsize = game->map->size;
+    if (i >= 0 && i < mapsize.x && j >= 0 && j < mapsize.y && k >= 0 && k < mapsize.z) {
         if (game->scene->highlight_idx) {
             glm::uvec3 v = *game->scene->highlight_idx;
             game->scene->platform[v.x][v.y][v.z].highlight = std::nullopt;
@@ -936,9 +903,6 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
         game->scene->platform[i][j][k].highlight = Highlight{};
         game->scene->highlight_idx = {i, j, k};
     }
-
-    //obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f);
-    //obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f;
 }
 
 /// Handle Scrool wheel events
