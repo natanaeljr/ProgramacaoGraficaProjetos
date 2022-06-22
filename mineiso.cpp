@@ -129,10 +129,10 @@ GLObject create_gl_object(const Vertex vertices[], const size_t num_vertices, co
 constexpr auto gen_quad_geometry(glm::vec2 v, glm::vec2 to, glm::vec2 ts) -> std::tuple<std::array<Vertex, 4>, std::array<GLushort, 6>>
 {
     std::array<Vertex, 4> vertices = {
-        Vertex{.pos = { 0.f,  0.f }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
-        Vertex{.pos = { 0.f, -v.y }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
-        Vertex{.pos = { v.x,  0.f }, .texcoord = { to.x + ts.x, to.y + ts.y }},
-        Vertex{.pos = { v.x, -v.y }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
+        Vertex{.pos = { 0.f,  0.f }, .texcoord = { to.x + 0.0f, to.y + 0.0f }},
+        Vertex{.pos = { 0.f,  v.y }, .texcoord = { to.x + 0.0f, to.y + ts.y }},
+        Vertex{.pos = { v.x,  0.f }, .texcoord = { to.x + ts.x, to.y + 0.0f }},
+        Vertex{.pos = { v.x,  v.y }, .texcoord = { to.x + ts.x, to.y + ts.y }},
     };
     std::array<GLushort, 6> indices = {
         0, 1, 2,
@@ -466,6 +466,7 @@ Map load_map(const Game& game)
 
 constexpr glm::vec2 blocks_tileset_size{526.f, 232.f};
 constexpr glm::vec2 blocks_tile_size{52.f, 58.f};
+constexpr float tile_surface_height = 26.f;
 
 static const std::unordered_map<BlockIdx, glm::vec2> blocks_offset = {
     {BlockIdx::GRASS, {0.f, 0.f}},
@@ -666,10 +667,23 @@ void render_aabbs(Game& game, GLuint shader)
 }
 
 /// Render triangles for all objects
-void render_triagles(Game& game, GLuint shader)
+void render_triangles(Game& game, GLuint shader)
 {
     glLineWidth(1.0f);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    for (int i = game.map->size.x-1; i >=0 ; i--) {
+        for (int j = 0; j < (int)game.map->size.y; j++) {
+            for (int k = 0; k < (int)game.map->size.z; k++) {
+                auto* obj = &game.scene->platform[i][j][k];
+                if (obj->glo) {
+                    glBindVertexArray(obj->glo->vao);
+                    Transform transform = obj->transform;
+                    draw_object(shader, *game.black_texture, *obj->glo, transform.matrix(), std::nullopt, std::nullopt);
+                }
+            }
+        }
+    }
+
     for (auto* object_list : game.scene->objects.all_lists()) {
         for (auto obj = object_list->rbegin(); obj != object_list->rend(); obj++) {
             glBindVertexArray(obj->glo->vao);
@@ -677,6 +691,7 @@ void render_triagles(Game& game, GLuint shader)
             draw_object(shader, *game.black_texture, *obj->glo, transform.matrix(), std::nullopt, std::nullopt);
         }
     }
+
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
@@ -721,7 +736,7 @@ void game_render(Game& game)
         render_grid(game, shader);
 
     if (game.debug_triangles)
-        render_triagles(game, shader);
+        render_triangles(game, shader);
 }
 
 /// Game Loop, only returns when game finishes
@@ -877,6 +892,24 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
+float area(glm::vec2 a, glm::vec2 b, glm::vec2 c)
+{
+    return std::abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2.f;
+}
+
+// input in canvas position
+bool collides(glm::vec2 cursor_pos, glm::vec2 target_pos)
+{
+    glm::vec2 tile_surface = {blocks_tile_size.x, tile_surface_height};
+    float height_normal = blocks_tile_size.y / tile_surface_height;
+    glm::vec2 A = {target_pos.x + 0.0f, target_pos.y + 0.5f * height_normal};
+    glm::vec2 B = {target_pos.x + 0.5f, target_pos.y + 0.0f * height_normal};
+    glm::vec2 C = {target_pos.x + 1.0f, target_pos.y + 0.5f * height_normal};
+    glm::vec2 D = {target_pos.x + 0.5f, target_pos.y + 1.0f * height_normal};
+    auto p = cursor_pos;
+    return area(A, B, D) == area(A, p, B) + area(p, B, D) + area(A, p, D);
+}
+
 /// Handle cursor movement events
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
 {
@@ -890,12 +923,15 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
     glm::vec2 canvas_pos = normal_pos * glm::vec2(game->camera->canvas_size) - glm::vec2(game->camera->canvas_size) / 2.f;
 
     // cartesian to isometric
-    int i = canvas_pos.x + 2.f * canvas_pos.y + game->map->size.x / 2.f;
-    int j = i - 4.f * canvas_pos.y;
-    int k = 0;
+    float i = canvas_pos.x + 2.f * canvas_pos.y + game->map->size.x / 2.f;
+    float j = i - 4.f * canvas_pos.y;
+    float k = 0;
 
     glm::ivec3 mapsize = game->map->size;
     if (i >= 0 && i < mapsize.x && j >= 0 && j < mapsize.y && k >= 0 && k < mapsize.z) {
+        bool ret = collides(canvas_pos, game->scene->platform[i][j][k].transform.position);
+        printf("collides %d with i %f j %f k %f\n", ret, i, j, k);
+
         if (game->scene->highlight_idx) {
             glm::uvec3 v = *game->scene->highlight_idx;
             game->scene->platform[v.x][v.y][v.z].highlight = std::nullopt;
