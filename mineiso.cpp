@@ -497,8 +497,8 @@ Scene load_scene(const Game& game)
                 auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), blocks_offset.at(block) / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
                 obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
                 obj.texture = block_texture;
-                obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f);
-                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f;
+                obj.transform.position.x = i * 0.5f + j * 0.5f - /*canvas offset*/(game.map->tilemap.size() / 2.f);
+                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f - /*canvas offset*/0.5f;
                 obj.transform.scale = glm::vec2(1.f);
             }
         }
@@ -510,7 +510,7 @@ Scene load_scene(const Game& game)
         auto& obj = platform[i][j][k];
         obj.transform.scale = glm::vec2(0.7f);
         obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-        obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+        obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
         obj.texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-steve.png"));
         //constexpr glm::vec2 sprite_size = {307.f, 72.f};
         constexpr glm::vec2 sprite_frame_size = {38.f, 72.f};
@@ -811,7 +811,7 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
                     game.scene->player_idx.x = i;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i-1][j][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
                 }
             }
         }
@@ -823,7 +823,7 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
                     game.scene->player_idx.x = i;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i+1][j][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
                 }
             }
         }
@@ -835,7 +835,7 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
                     game.scene->player_idx.y = j;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j-1][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
                 }
             }
         }
@@ -847,7 +847,7 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
                     game.scene->player_idx.y = j;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j+1][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.8f;
+                    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
                 }
             }
         }
@@ -937,7 +937,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
                 obj.texture = game->scene->platform[s.x][s.y][s.z].texture;
                 obj.transform.position.x = v.x * 0.5f + v.y * 0.5f - (game->map->tilemap.size() / 2.f);
-                obj.transform.position.y = v.x * 0.25f - v.y * 0.25f + v.z * 0.5f;
+                obj.transform.position.y = v.x * 0.25f - v.y * 0.25f + v.z * 0.5f - 0.5f;
                 obj.transform.scale = glm::vec2(1.f);
             }
         }
@@ -992,8 +992,8 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
     canvas_pos.y -= 1.25f - (tile_surface_height / blocks_tile_size.y);
 
     // cartesian to isometric
-    float i = canvas_pos.x + 2.f * canvas_pos.y + game->map->size.x / 2.f;
-    float j = i - 4.f * canvas_pos.y;
+    float i = canvas_pos.x + 2.f * canvas_pos.y + (game->map->size.x / 2.f) + 1.f;
+    float j = i - 4.f * canvas_pos.y - 2.f;
     float k = 0;
 
     glm::ivec3 mapsize = game->map->size;
