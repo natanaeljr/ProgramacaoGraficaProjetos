@@ -917,34 +917,65 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
     game->key_states.value()[key] = (action == GLFW_PRESS);
 }
 
+void cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
+
 /// Handle Mouse click events
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 {
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
 
+    if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_RIGHT) {
+        if (game->scene->highlight_idx) {
+            glm::uvec3 s = *game->scene->highlight_idx;
+            glm::uvec3 v = s; v.z += 1;
+            auto& block_above = game->map->tilemap[v.x][v.y][v.z];
+            if (block_above == BlockIdx::AIR) {
+                block_above = BlockIdx::STONE;
+                auto& obj = game->scene->platform[v.x][v.y][v.z];
+                auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), blocks_offset.at(block_above) / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
+                obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+                obj.texture = game->scene->platform[s.x][s.y][s.z].texture;
+                obj.transform.position.x = v.x * 0.5f + v.y * 0.5f - (game->map->tilemap.size() / 2.f);
+                obj.transform.position.y = v.x * 0.25f - v.y * 0.25f + v.z * 0.5f;
+                obj.transform.scale = glm::vec2(1.f);
+            }
+        }
+
+    }
+
     if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
-        double mx, my;
-        glfwGetCursorPos(window, &mx, &my);
+        if (game->scene->highlight_idx) {
+            glm::uvec3 v = *game->scene->highlight_idx;
+            if (v.z != 0) {
+                game->map->tilemap[v.x][v.y][v.z] = BlockIdx::AIR;
+                game->scene->platform[v.x][v.y][v.z].highlight = std::nullopt;
+                auto& obj = game->scene->platform[v.x][v.y][v.z];
+                obj.glo = nullptr;
+                double mx, my;
+                glfwGetCursorPos(window, &mx, &my);
+                cursor_position_callback(game->window.glfw, mx, my);
+            }
+        }
     }
 }
 
-float area(glm::vec2 a, glm::vec2 b, glm::vec2 c)
-{
-    return std::abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2.f;
-}
+//float area(glm::vec2 a, glm::vec2 b, glm::vec2 c)
+//{
+    //return std::abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2.f;
+//}
 
-// input in canvas position
-bool collides(glm::vec2 cursor_pos, glm::vec2 target_pos)
-{
-    float h/*height_normal*/ = tile_surface_height / blocks_tile_size.y;
-    glm::vec2 A = {target_pos.x + 0.0f, target_pos.y + (1.f - h) + 0.5f * h};
-    glm::vec2 B = {target_pos.x + 0.5f, target_pos.y + (1.f - h) + 0.0f * h};
-    glm::vec2 C = {target_pos.x + 1.0f, target_pos.y + (1.f - h) + 0.5f * h};
-    glm::vec2 D = {target_pos.x + 0.5f, target_pos.y + (1.f - h) + 1.0f * h};
-    auto p = cursor_pos;
-    return area(A, B, D) == area(A, p, B) + area(p, B, D) + area(A, p, D);
-}
+//// input in canvas position
+//bool collides(glm::vec2 cursor_pos, glm::vec2 target_pos)
+//{
+    //float h[>height_normal<] = tile_surface_height / blocks_tile_size.y;
+    //glm::vec2 A = {target_pos.x + 0.0f, target_pos.y + (1.f - h) + 0.5f * h};
+    //glm::vec2 B = {target_pos.x + 0.5f, target_pos.y + (1.f - h) + 0.0f * h};
+    //glm::vec2 C = {target_pos.x + 1.0f, target_pos.y + (1.f - h) + 0.5f * h};
+    //glm::vec2 D = {target_pos.x + 0.5f, target_pos.y + (1.f - h) + 1.0f * h};
+    //auto p = cursor_pos;
+    //return area(A, B, D) == area(A, p, B) + area(p, B, D) + area(A, p, D);
+//}
 
 /// Handle cursor movement events
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
@@ -967,8 +998,21 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
 
     glm::ivec3 mapsize = game->map->size;
     if (i >= 0 && i < mapsize.x && j >= 0 && j < mapsize.y && k >= 0 && k < mapsize.z) {
-        bool ret = collides(canvas_pos, game->scene->platform[i][j][k].transform.position);
-        printf("collides %d with i %f j %f k %f\n", ret, i, j, k);
+        //bool ret = collides(canvas_pos, game->scene->platform[i][j][k].transform.position);
+        //printf("collides %d with i %f j %f k %f\n", ret, i, j, k);
+
+        // check other k layers
+        for (int n = mapsize.z-1; n > 0; n--) {
+            glm::vec3 p = {i - n, j + n, n};
+            if (p.x < 0 || p.y >= mapsize.y || p.z >= mapsize.z)
+                continue;
+            auto& block = game->map->tilemap[p.x][p.y][p.z];
+            if (block != BlockIdx::AIR) {
+                i = p.x;
+                j = p.y;
+                k = p.z;
+            }
+        }
 
         if (game->scene->highlight_idx) {
             glm::uvec3 v = *game->scene->highlight_idx;
@@ -977,6 +1021,12 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
         game->scene->platform[i][j][k].highlight = Highlight{};
         game->scene->highlight_idx = {i, j, k};
     }
+
+
+    // check for k level:
+    // i -= 1, j
+    // i =, j += 1
+    // i -= 1, j +=1
 }
 
 /// Handle Scrool wheel events
