@@ -415,6 +415,7 @@ struct Game {
     Window window;
     Viewport viewport;
     glm::vec2 cursor;
+    float zoom;
     GLuint shader_program;
     GLObjectRef canvas_quad_glo;
     GLTextureRef white_texture;
@@ -544,6 +545,7 @@ int game_init(Game& game, GLFWwindow* window)
     game.viewport.size = glm::uvec2(WIDTH, HEIGHT);
     game.viewport.offset = glm::uvec2(0);
     game.cursor = glm::vec2(0.f);
+    game.zoom = 1.0f;
     game.shader_program = load_shader_program();
     auto [quad_vertices, quad_indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2((float)WIDTH / (float)HEIGHT, 1.0f));
     game.canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size(), quad_indices.data(), quad_indices.size()));
@@ -695,6 +697,41 @@ void render_triangles(Game& game, GLuint shader)
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
+
+/// Render surface of tiles
+void render_surface(Game& game, GLuint shader)
+{
+    glLineWidth(1.0f);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+    float h/*height_normal*/ = tile_surface_height / blocks_tile_size.y;
+    std::array<Vertex, 4> vertices = {
+        Vertex{.pos = { 0.0f,  0.5f * h }, .texcoord = { 0.0f, 0.5f }},
+        Vertex{.pos = { 0.5f,  0.0f     }, .texcoord = { 0.5f, 0.0f }},
+        Vertex{.pos = { 1.0f,  0.5f * h }, .texcoord = { 1.0f, 0.5f }},
+        Vertex{.pos = { 0.5f,  1.0f * h }, .texcoord = { 0.5f, 1.0f }},
+    };
+    std::array<GLushort, 6> indices = {
+        0, 1, 3,
+        1, 3, 2
+    };
+    GLObject glo = create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size(), GL_STREAM_DRAW);
+    glBindVertexArray(glo.vao);
+    for (int i = game.map->size.x-1; i >=0 ; i--) {
+        for (int j = 0; j < (int)game.map->size.y; j++) {
+            for (int k = 0; k < (int)game.map->size.z; k++) {
+                auto* obj = &game.scene->platform[i][j][k];
+                if (obj->glo) {
+                    Transform transform = obj->transform;
+                    transform.position.y += 1.f - h;
+                    draw_object(shader, *game.black_texture, glo, transform.matrix(), std::nullopt, std::nullopt);
+                }
+            }
+        }
+    }
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
+
 /// Render Game scene
 void game_render(Game& game)
 {
@@ -736,7 +773,7 @@ void game_render(Game& game)
         render_grid(game, shader);
 
     if (game.debug_triangles)
-        render_triangles(game, shader);
+        render_surface(game, shader);
 }
 
 /// Game Loop, only returns when game finishes
@@ -900,12 +937,11 @@ float area(glm::vec2 a, glm::vec2 b, glm::vec2 c)
 // input in canvas position
 bool collides(glm::vec2 cursor_pos, glm::vec2 target_pos)
 {
-    glm::vec2 tile_surface = {blocks_tile_size.x, tile_surface_height};
-    float height_normal = blocks_tile_size.y / tile_surface_height;
-    glm::vec2 A = {target_pos.x + 0.0f, target_pos.y + 0.5f * height_normal};
-    glm::vec2 B = {target_pos.x + 0.5f, target_pos.y + 0.0f * height_normal};
-    glm::vec2 C = {target_pos.x + 1.0f, target_pos.y + 0.5f * height_normal};
-    glm::vec2 D = {target_pos.x + 0.5f, target_pos.y + 1.0f * height_normal};
+    float h/*height_normal*/ = tile_surface_height / blocks_tile_size.y;
+    glm::vec2 A = {target_pos.x + 0.0f, target_pos.y + (1.f - h) + 0.5f * h};
+    glm::vec2 B = {target_pos.x + 0.5f, target_pos.y + (1.f - h) + 0.0f * h};
+    glm::vec2 C = {target_pos.x + 1.0f, target_pos.y + (1.f - h) + 0.5f * h};
+    glm::vec2 D = {target_pos.x + 0.5f, target_pos.y + (1.f - h) + 1.0f * h};
     auto p = cursor_pos;
     return area(A, B, D) == area(A, p, B) + area(p, B, D) + area(A, p, D);
 }
@@ -921,6 +957,8 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
     glm::vec2 cursor_pos{xpos, ypos};
     glm::vec2 normal_pos = cursor_pos / glm::vec2(game->window.size);
     glm::vec2 canvas_pos = normal_pos * glm::vec2(game->camera->canvas_size) - glm::vec2(game->camera->canvas_size) / 2.f;
+    canvas_pos *= glm::vec2(game->zoom);
+    canvas_pos.y -= 1.25f - (tile_surface_height / blocks_tile_size.y);
 
     // cartesian to isometric
     float i = canvas_pos.x + 2.f * canvas_pos.y + game->map->size.x / 2.f;
@@ -947,9 +985,8 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
 
-    static float zoom{1.f};
-    zoom += -yoffset * 0.05f;
-    game->camera = Camera::create(game->window.aspect_ratio(), zoom);
+    game->zoom += -yoffset * 0.05f;
+    game->camera = Camera::create(game->window.aspect_ratio(), game->zoom);
 }
 
 /// Handle Window framebuffer resize event
@@ -959,7 +996,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
     if (!game) return;
 
     glViewport(0, 0, width, height);
-    game->camera = Camera::create((float)width / (float)height, 1.f);
+    game->camera = Camera::create((float)width / (float)height, game->zoom);
 
     auto [quad_vertices, quad_indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2((float)width / (float)height, 1.0f));
     game->canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size(), quad_indices.data(), quad_indices.size()));
