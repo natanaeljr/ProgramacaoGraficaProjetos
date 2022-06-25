@@ -58,11 +58,10 @@ void main() {
 #version 410
 in vec2 texcoord;
 uniform sampler2D texture0;
-uniform vec2 texoffset;
 uniform vec4 color;
 out vec4 frag_color;
 void main(){
-    frag_color = texture(texture0, texcoord + texoffset) * color;
+    frag_color = texture(texture0, texcoord) * color;
 }
 )";
 
@@ -299,26 +298,24 @@ struct Motion {
 struct Gravity {
 };
 
-/// Texture Slide component
-struct TextureSlide {
-    glm::vec2 velocity     {0.0f};
-    glm::vec2 acceleration {0.0f};
-};
-
-/// Texture Offset component
-struct TextureOffset {
-    glm::vec2 vec {0.0f};
-};
-
-/// Entity State component
-enum class EntityState {
-    IDLE,
-    WALKING,
-    JUMPING,
-};
-
 /// Highlight component
 struct Highlight {
+};
+
+/// Timed Action
+struct TimedAction {
+    float tick_dt;  // deltatime between last round and now
+    float duration; // time to go off, in seconds
+    std::function<void(struct Game& game, float dt, float time)> action  { [](auto&&...){} };
+
+    /// Update timer and invoke action on expire
+    void update(Game& game, float dt, float time) {
+        tick_dt += dt;
+        if (tick_dt >= duration) {
+            tick_dt -= duration;
+            action(game, dt, time);
+        }
+    }
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -342,10 +339,7 @@ struct GameObject {
     Motion motion;
     GLObjectRef glo;
     GLTextureRef texture;
-    std::optional<TextureSlide> texture_slide;
-    std::optional<TextureOffset> texture_offset;
     std::optional<SpriteAnimation> sprite_animation;
-    std::optional<EntityState> entity_state;
     std::optional<Gravity> gravity;
     std::optional<Highlight> highlight;
 };
@@ -370,10 +364,12 @@ struct Scene {
     std::vector<std::vector<std::vector<GameObject>>> platform;
     glm::uvec3 player_idx;
     std::optional<glm::uvec3> highlight_idx;
+    GameObject& player() { auto p = player_idx; return platform[p.x][p.y][p.z]; }
 };
 
 /// All Game data
 struct Game {
+    bool over;
     Window window;
     Viewport viewport;
     glm::vec2 cursor;
@@ -387,8 +383,8 @@ struct Game {
     std::optional<Map> map;
     std::optional<Scene> scene;
     std::optional<KeyStateMap> key_states;
-    bool debug_grid;
-    bool debug_aabb;
+    std::vector<TimedAction> timed_actions;
+    int books_collected_count;
     bool debug_triangles;
 };
 
@@ -399,26 +395,45 @@ Map load_map(const Game& game)
     map.size = {20, 20, 10};
     map.tilemap = std::vector(map.size.x, std::vector(map.size.y, std::vector(map.size.z, ObjectType::AIR)));
 
+    ObjectType ground_blocks[] = {
+        ObjectType::GRASS,
+        ObjectType::GRASS,
+        ObjectType::GRASS,
+        ObjectType::STONE,
+        ObjectType::STONE,
+        ObjectType::STONE,
+        ObjectType::WOODPLANK,
+    };
+
     for (int i = 0; i < (int)map.tilemap.size(); i++) {
-        for (int j = 0; j < (int)map.tilemap[i].size(); j++) {
-            map.tilemap[i][j][0] = ObjectType::GRASS;
-        }
+      for (int j = 0; j < (int)map.tilemap[i].size(); j++) {
+        int index = std::rand() % sizeof(ground_blocks) / sizeof(ground_blocks[0]);
+        map.tilemap[i][j][0] = ground_blocks[index];
+      }
     }
 
-    size_t i = 5;
-    size_t j = 8;
-    map.tilemap[i][j][1] = ObjectType::STONE;
-    map.tilemap[i][j][2] = ObjectType::STONE;
-    map.tilemap[i][j][3] = ObjectType::STONE;
+    //size_t i = 5;
+    //size_t j = 8;
+    //map.tilemap[i][j][1] = ObjectType::STONE;
+    //map.tilemap[i][j][2] = ObjectType::STONE;
+    //map.tilemap[i][j][3] = ObjectType::STONE;
 
-    map.tilemap[i][j+1][1] = ObjectType::STONE;
-    map.tilemap[i][j+1][2] = ObjectType::STONE;
-    map.tilemap[i][j+1][3] = ObjectType::STONE;
-    map.tilemap[i-1][j+1][3] = ObjectType::WOODPLANK;
-    map.tilemap[i-1][j][3] = ObjectType::WOODPLANK;
+    //map.tilemap[i][j+1][1] = ObjectType::STONE;
+    //map.tilemap[i][j+1][2] = ObjectType::STONE;
+    //map.tilemap[i][j+1][3] = ObjectType::STONE;
+    //map.tilemap[i-1][j+1][3] = ObjectType::WOODPLANK;
+    //map.tilemap[i-1][j][3] = ObjectType::WOODPLANK;
 
-    i = map.size.x/2, j = map.size.y/2+1;
-    map.tilemap[i][j][1] = ObjectType::BOOK;
+    // spawn books
+    for (int x = 0; x < 10; x++) {
+        int i = std::rand() % map.size.x;
+        int j = std::rand() % map.size.y;
+        if (map.tilemap[i][j][1] == ObjectType::BOOK) {
+            x--;
+            continue;
+        }
+        map.tilemap[i][j][1] = ObjectType::BOOK;
+    }
 
     return map;
 }
@@ -459,12 +474,13 @@ GameObject create_book_object(const Game& game, glm::ivec3 p)
     constexpr glm::vec2 sprite_frame_size = {31.f, 42.f};
     auto [vertices, indices] = gen_sprite_quads(5, glm::vec2(sprite_frame_size.x / sprite_frame_size.y, 1.f), glm::vec2(0.f), glm::vec2(5.f, 1.f) * sprite_frame_size / sprite_size);
     obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+    float d1 = (float)(std::rand() % 10) / 10.f;
     obj.sprite_animation = SpriteAnimation{
         .freeze = false,
         .last_transit_dt = 0,
         .curr_frame_idx = 0,
         .frames = std::vector<SpriteFrame>{
-            { .duration = 0.75, .ebo_offset = 00, .ebo_count = 6, .next_frame_idx = 1 },
+            { .duration = (0.75f + d1), .ebo_offset = 00, .ebo_count = 6, .next_frame_idx = 1 },
             { .duration = 0.15, .ebo_offset = 12, .ebo_count = 6, .next_frame_idx = 2 },
             { .duration = 0.15, .ebo_offset = 24, .ebo_count = 6, .next_frame_idx = 3 },
             { .duration = 0.15, .ebo_offset = 36, .ebo_count = 6, .next_frame_idx = 4 },
@@ -536,8 +552,16 @@ Scene load_scene(const Game& game)
         }
     }
 
-    { // Player Steve
-        int i = game.map->size.x/2, j = game.map->size.y/2, k = 1;
+    { // Player
+        // random position
+        int i, j, k = 1;
+        do {
+            i = std::rand() % game.map->size.x;
+            j = std::rand() % game.map->size.y;
+            if (game.map->tilemap[i][j][1] == ObjectType::AIR && game.map->tilemap[i][j][2] == ObjectType::AIR)
+                break;
+        } while(1);
+        // create player object
         scene.player_idx = glm::vec3(i, j, k);
         platform[i][j][k] = create_player_object(game, {i, j, k});
     }
@@ -545,9 +569,29 @@ Scene load_scene(const Game& game)
     return scene;
 }
 
+/// Drop a tile block with gravity
+void drop_tile_block(Game& game, float dt, float time)
+{
+    do {
+        int i = std::rand() % game.map->size.x;
+        int j = std::rand() % game.map->size.y;
+        if (game.map->tilemap[i][j][1] == ObjectType::BOOK || glm::uvec3(i, j, 1) == game.scene->player_idx) {
+          continue;
+        }
+        auto& platform = game.scene->platform;
+        for (size_t k = 0; k < game.map->size.z; k++) {
+            if (platform[i][j][k].glo)
+                platform[i][j][k].gravity = Gravity{};
+        }
+        break;
+    } while(1);
+}
+
 /// Initialize Game
 int game_init(Game& game, GLFWwindow* window)
 {
+    std::srand(std::time(nullptr));
+    game.over = false;
     game.window.glfw = window;
     game.window.size = glm::uvec2(WIDTH, HEIGHT);
     game.viewport.size = glm::uvec2(WIDTH, HEIGHT);
@@ -564,23 +608,64 @@ int game_init(Game& game, GLFWwindow* window)
     game.map = load_map(game);
     game.scene = load_scene(game);
     game.key_states = KeyStateMap(GLFW_KEY_LAST);
-    game.debug_grid = false;
-    game.debug_aabb = false;
+    game.books_collected_count = 0;
     game.debug_triangles = false;
+
+    game.timed_actions = {};
+    game.timed_actions.push_back(TimedAction{
+        .tick_dt = 0,
+        .duration = 0.4,
+        .action = drop_tile_block,
+    });
+    game.timed_actions.push_back(TimedAction{
+        .tick_dt = 0,
+        .duration = 3,
+        .action =
+            [](Game &game, auto &&...) {
+                if (game.books_collected_count == 10) {
+                    std::cout << "YOU WIN" << std::endl;
+                    game.over = true;
+                }
+                else if (game.scene->player().gravity) {
+                    std::cout << "GAME OVER" << std::endl;
+                    game.over = true;
+                }
+            },
+    });
+
+    std::cout << "GAME START" << std::endl;
 
     return 0;
 }
 
-/// Game tick update
-void game_update(Game& game, float dt)
+void game_restart(Game& game)
 {
+    game.over = false;
+    game.map = load_map(game);
+    game.scene = load_scene(game);
+    game.books_collected_count = 0;
+
+    std::cout << "GAME RESTART" << std::endl;
+}
+
+/// Game tick update
+void game_update(Game& game, float dt, float time)
+{
+    if (game.over) return;
+
+    // Run timed actions
+    for (auto& timed_action : game.timed_actions) {
+        timed_action.update(game, dt, time);
+    }
+
+    // Update all objects
     for (int i = game.map->size.x-1; i >=0 ; i--) {
         for (int j = 0; j < (int)game.map->size.y; j++) {
             for (int k = 0; k < (int)game.map->size.z; k++) {
                 auto* obj = &game.scene->platform[i][j][k];
                 // Gravity system
-                if (obj->gravity && (!obj->entity_state || obj->entity_state != EntityState::JUMPING)) {
-                    constexpr float kGravityFactor = 20.f;
+                if (obj->gravity) {
+                    constexpr float kGravityFactor = 10.f;
                     obj->motion.acceleration.y = -kGravityFactor;
                 }
                 // Motion system
@@ -589,11 +674,6 @@ void game_update(Game& game, float dt)
                 // Sprite Animation system
                 if (obj->sprite_animation) {
                     obj->sprite_animation->update_frame(dt);
-                }
-                // Texture Sliding system
-                if (obj->texture_slide && obj->texture_offset) {
-                    obj->texture_slide->velocity += obj->texture_slide->acceleration * dt;
-                    obj->texture_offset->vec += obj->texture_slide->velocity * dt;
                 }
             }
         }
@@ -619,11 +699,9 @@ void set_camera(const GLuint shader, const Camera& camera)
 
 /// Render a textured GLObject
 void draw_object(const GLuint shader, const GLTexture& texture, const GLObject& glo, const glm::mat4& model,
-                 const std::optional<TextureOffset> texoffset, const std::optional<SpriteFrame> sprite, const glm::vec4 color = glm::vec4(1.f))
+                 const std::optional<SpriteFrame> sprite, const glm::vec4 color = glm::vec4(1.f))
 {
     glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model));
-    glm::vec2 texoffset_vec = texoffset ? texoffset->vec : glm::vec2(0.f);
-    glUniform2fv(glGetUniformLocation(shader, "texoffset"), 1, glm::value_ptr(texoffset_vec));
     glUniform4fv(glGetUniformLocation(shader, "color"), 1, glm::value_ptr(color));
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -631,24 +709,6 @@ void draw_object(const GLuint shader, const GLTexture& texture, const GLObject& 
     size_t ebo_offset = sprite ? sprite->ebo_offset : 0;
     size_t ebo_count = sprite ? sprite->ebo_count : glo.num_indices;
     glDrawElements(GL_TRIANGLES, ebo_count, GL_UNSIGNED_SHORT, (const void*)ebo_offset);
-}
-
-/// Render the canvas grid
-void render_grid(Game& game, GLuint shader)
-{
-    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-    auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
-    GLObject glo = create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size());
-    glBindVertexArray(glo.vao);
-    for (float i = 0; i < game.camera->canvas_size.x; i++) {
-        for (float j = 0; j < game.camera->canvas_size.y; j++) {
-            Transform transform;
-            transform.position = glm::vec3(0.5f + i, 0.5f + j, 0.0f);
-            transform.scale = glm::vec2(0.5);
-            draw_object(shader, *game.black_texture, glo, transform.matrix(), std::nullopt, std::nullopt);
-        }
-    }
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
 /// Render triangles for all objects
@@ -663,7 +723,7 @@ void render_triangles(Game& game, GLuint shader)
                 if (obj->glo) {
                     glBindVertexArray(obj->glo->vao);
                     Transform transform = obj->transform;
-                    draw_object(shader, *game.black_texture, *obj->glo, transform.matrix(), std::nullopt, std::nullopt);
+                    draw_object(shader, *game.black_texture, *obj->glo, transform.matrix(), std::nullopt);
                 }
             }
         }
@@ -699,7 +759,7 @@ void render_surface(Game& game, GLuint shader)
                 if (obj->glo) {
                     Transform transform = obj->transform;
                     transform.position.y += 1.f - h;
-                    draw_object(shader, *game.black_texture, glo, transform.matrix(), std::nullopt, std::nullopt);
+                    draw_object(shader, *game.black_texture, glo, transform.matrix(), std::nullopt);
                 }
             }
         }
@@ -726,14 +786,11 @@ void game_render(Game& game)
                     if (obj->highlight)
                         color = glm::vec4(glm::vec3(0.65f), 1.f);
                     auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
-                    draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite, color);
+                    draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), sprite, color);
                 }
             }
         }
     }
-
-    if (game.debug_grid)
-        render_grid(game, shader);
 
     if (game.debug_triangles)
         render_surface(game, shader);
@@ -752,7 +809,7 @@ int game_loop(GLFWwindow* window)
         float dt = now_time - last_time;
         last_time = now_time;
         glfwPollEvents();
-        game_update(game, dt);
+        game_update(game, dt, now_time);
         game_render(game);
         glfwSwapBuffers(window);
     }
@@ -765,16 +822,23 @@ int game_loop(GLFWwindow* window)
 
 void key_arrows_handler(struct Game& game, int key, int action, int mods)
 {
-    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+    if (game.scene->player().gravity) return;
+
+    if (action == GLFW_PRESS) {
         if (key == GLFW_KEY_UP) {
             int i = game.scene->player_idx.x + 1, j = game.scene->player_idx.y, k = game.scene->player_idx.z;
             game.scene->platform[i-1][j][k].sprite_animation->curr_frame_idx = 3;
             if (i < (int)game.map->size.x ) {
-                if (!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) {
+                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || game.map->tilemap[i][j][k] == ObjectType::BOOK) {
                     game.scene->player_idx.x = i;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i-1][j][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
                     obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
+                    if (game.scene->platform[i][j][0].gravity) { obj.gravity = Gravity{}; }
+                    if (game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                        game.map->tilemap[i][j][k] = ObjectType::AIR;
+                        game.books_collected_count++;
+                    }
                 }
             }
         }
@@ -782,11 +846,16 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
             int i = game.scene->player_idx.x - 1, j = game.scene->player_idx.y, k = game.scene->player_idx.z;
             game.scene->platform[i+1][j][k].sprite_animation->curr_frame_idx = 1;
             if (i >= 0) {
-                if (!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) {
+                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || game.map->tilemap[i][j][k] == ObjectType::BOOK) {
                     game.scene->player_idx.x = i;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i+1][j][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
                     obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
+                    if (game.scene->platform[i][j][0].gravity) { obj.gravity = Gravity{}; }
+                    if (game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                        game.map->tilemap[i][j][k] = ObjectType::AIR;
+                        game.books_collected_count++;
+                    }
                 }
             }
         }
@@ -794,11 +863,16 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
             int i = game.scene->player_idx.x, j = game.scene->player_idx.y + 1, k = game.scene->player_idx.z;
             game.scene->platform[i][j-1][k].sprite_animation->curr_frame_idx = 0;
             if (j < (int)game.map->size.y) {
-                if (!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) {
+                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || game.map->tilemap[i][j][k] == ObjectType::BOOK) {
                     game.scene->player_idx.y = j;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j-1][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
                     obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
+                    if (game.scene->platform[i][j][0].gravity) { obj.gravity = Gravity{}; }
+                    if (game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                        game.map->tilemap[i][j][k] = ObjectType::AIR;
+                        game.books_collected_count++;
+                    }
                 }
             }
         }
@@ -806,50 +880,26 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
             int i = game.scene->player_idx.x, j = game.scene->player_idx.y - 1, k = game.scene->player_idx.z;
             game.scene->platform[i][j+1][k].sprite_animation->curr_frame_idx = 2;
             if (j >= 0) {
-                if (!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) {
+                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || game.map->tilemap[i][j][k] == ObjectType::BOOK) {
                     game.scene->player_idx.y = j;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j+1][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
                     obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
+                    if (game.scene->platform[i][j][0].gravity) { obj.gravity = Gravity{}; }
+                    if (game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                        game.map->tilemap[i][j][k] = ObjectType::AIR;
+                        game.books_collected_count++;
+                    }
                 }
             }
         }
     }
 }
 
-void key_space_handler(struct Game& game, int key, int action, int mods)
-{
-    //if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        //game.scene->player().motion.velocity.y = 10.f;
-        //game.scene->player().entity_state = EntityState::JUMPING;
-        //game.scene->player().sprite_animation->freeze = true;
-        //game.scene->player().sprite_animation->curr_frame_idx = 2;
-    //}
-    //else if (action == GLFW_RELEASE) {
-        //game.scene->player().motion.velocity.y = 0.0f;
-        //game.scene->player().sprite_animation->freeze = true;
-        //game.scene->player().sprite_animation->curr_frame_idx = 0;
-        //if (game.scene->player().entity_state == EntityState::JUMPING)
-            //game.scene->player().entity_state = EntityState::IDLE;
-    //}
-}
-
 void key_f5_handler(struct Game& game, int key, int action, int mods)
 {
   if (action == GLFW_PRESS)
     game.debug_triangles = !game.debug_triangles;
-}
-
-void key_f6_handler(struct Game& game, int key, int action, int mods)
-{
-  if (action == GLFW_PRESS)
-    game.debug_grid = !game.debug_grid;
-}
-
-void key_f7_handler(struct Game& game, int key, int action, int mods)
-{
-  if (action == GLFW_PRESS)
-    game.debug_aabb = !game.debug_aabb;
 }
 
 /// Handle Key input event
@@ -861,20 +911,17 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(game->window.glfw, 1);
     }
-    else if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT || key == GLFW_KEY_UP || key == GLFW_KEY_DOWN) {
-        key_arrows_handler(*game, key, action, mods);
+    else if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+        game_restart(*game);
     }
-    else if (key == GLFW_KEY_SPACE) {
-        key_space_handler(*game, key, action, mods);
+
+    if (game->over) return;
+
+    if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT || key == GLFW_KEY_UP || key == GLFW_KEY_DOWN) {
+        key_arrows_handler(*game, key, action, mods);
     }
     else if (key == GLFW_KEY_F5) {
         key_f5_handler(*game, key, action, mods);
-    }
-    else if (key == GLFW_KEY_F6) {
-        key_f6_handler(*game, key, action, mods);
-    }
-    else if (key == GLFW_KEY_F7) {
-        key_f7_handler(*game, key, action, mods);
     }
 
     game->key_states.value()[key] = (action == GLFW_PRESS);
