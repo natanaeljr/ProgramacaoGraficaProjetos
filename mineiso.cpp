@@ -33,7 +33,7 @@ using namespace std::chrono_literals;
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Settings
 
-constexpr size_t WIDTH = 900, HEIGHT = 500;
+constexpr size_t WIDTH = 1280, HEIGHT = 720;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Shader
@@ -222,8 +222,8 @@ auto load_rgba_texture(const std::string& inpath) -> std::optional<GLTexture>
     GLuint texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
     glTexImage2D(GL_TEXTURE_2D, 0, type, width, height, 0, type, GL_UNSIGNED_BYTE, data);
@@ -380,17 +380,18 @@ struct GameObject {
     std::optional<Highlight> highlight;
 };
 
-enum BlockIdx {
+enum ObjectType {
     AIR = 0,
     GRASS,
     STONE,
     WOOD,
     WOODPLANK,
+    BOOK,
 };
 
 struct Map {
     glm::uvec3 size;
-    std::vector<std::vector<std::vector<BlockIdx>>> tilemap;
+    std::vector<std::vector<std::vector<ObjectType>>> tilemap;
 };
 
 /// Lists of all Game Objects in a Scene, divised in layers, in order of render
@@ -420,6 +421,7 @@ struct Game {
     GLObjectRef canvas_quad_glo;
     GLTextureRef white_texture;
     GLTextureRef black_texture;
+    GLTextureRef block_texture;
     std::optional<Camera> camera;
     std::optional<Map> map;
     std::optional<Scene> scene;
@@ -434,11 +436,11 @@ Map load_map(const Game& game)
 {
     Map map;
     map.size = {20, 20, 10};
-    map.tilemap = std::vector(map.size.x, std::vector(map.size.y, std::vector(map.size.z, BlockIdx::AIR)));
+    map.tilemap = std::vector(map.size.x, std::vector(map.size.y, std::vector(map.size.z, ObjectType::AIR)));
 
     for (int i = 0; i < (int)map.tilemap.size(); i++) {
         for (int j = 0; j < (int)map.tilemap[i].size(); j++) {
-            map.tilemap[i][j][0] = BlockIdx::GRASS;
+            map.tilemap[i][j][0] = ObjectType::GRASS;
         }
     }
 
@@ -448,19 +450,24 @@ Map load_map(const Game& game)
     //size_t j = std::rand() % 21;
     size_t i = 5;
     size_t j = 8;
-    map.tilemap[i][j][1] = BlockIdx::STONE;
-    map.tilemap[i][j][2] = BlockIdx::STONE;
-    map.tilemap[i][j][3] = BlockIdx::STONE;
+    map.tilemap[i][j][1] = ObjectType::STONE;
+    map.tilemap[i][j][2] = ObjectType::STONE;
+    map.tilemap[i][j][3] = ObjectType::STONE;
 
-    map.tilemap[i][j+1][1] = BlockIdx::STONE;
-    map.tilemap[i][j+1][2] = BlockIdx::STONE;
-    map.tilemap[i][j+1][3] = BlockIdx::STONE;
+    map.tilemap[i][j+1][1] = ObjectType::STONE;
+    map.tilemap[i][j+1][2] = ObjectType::STONE;
+    map.tilemap[i][j+1][3] = ObjectType::STONE;
     //map.tilemap[i-1][j+1][1] = BlockIdx::WOODPLANK;
     //map.tilemap[i-1][j+1][2] = BlockIdx::WOODPLANK;
-    map.tilemap[i-1][j+1][3] = BlockIdx::WOODPLANK;
+    map.tilemap[i-1][j+1][3] = ObjectType::WOODPLANK;
     //map.tilemap[i-1][j][1] = BlockIdx::WOODPLANK;
     //map.tilemap[i-1][j][2] = BlockIdx::WOODPLANK;
-    map.tilemap[i-1][j][3] = BlockIdx::WOODPLANK;
+    map.tilemap[i-1][j][3] = ObjectType::WOODPLANK;
+
+    {
+        int i = map.size.x/2, j = map.size.y/2+1, k = 1;
+        map.tilemap[i][j][k] = ObjectType::BOOK;
+    }
 
     return map;
 }
@@ -469,12 +476,94 @@ constexpr glm::vec2 blocks_tileset_size{526.f, 232.f};
 constexpr glm::vec2 blocks_tile_size{52.f, 58.f};
 constexpr float tile_surface_height = 26.f;
 
-static const std::unordered_map<BlockIdx, glm::vec2> blocks_offset = {
-    {BlockIdx::GRASS, {0.f, 0.f}},
-    {BlockIdx::STONE, {53.f, 0.f}},
-    {BlockIdx::WOODPLANK, {53.f, 116.f}},
-    {BlockIdx::WOOD, {0.f, 116.f}},
+static const std::unordered_map<ObjectType, glm::vec2> blocks_offset = {
+    {ObjectType::GRASS, {0.f, 0.f}},
+    {ObjectType::STONE, {53.f, 0.f}},
+    {ObjectType::WOODPLANK, {53.f, 116.f}},
+    {ObjectType::WOOD, {0.f, 116.f}},
 };
+
+GameObject create_block_object(const Game& game, glm::ivec3 p, ObjectType block)
+{
+    int i = p.x, j = p.y, k = p.z;
+    GameObject obj{};
+    auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), blocks_offset.at(block) / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
+    obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+    obj.texture = game.block_texture;
+    obj.transform.position.x = i * 0.5f + j * 0.5f - /*canvas offset*/(game.map->tilemap.size() / 2.f);
+    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f - /*canvas offset*/0.5f;
+    obj.transform.scale = glm::vec2(1.f);
+    return obj;
+}
+
+GameObject create_book_object(const Game& game, glm::ivec3 p)
+{
+    int i = p.x, j = p.y, k = p.z;
+    GameObject obj{};
+    obj.transform.scale = glm::vec2(0.4f);
+    obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
+    obj.texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-book.png"));
+    constexpr glm::vec2 sprite_size = {467.f, 42};
+    constexpr glm::vec2 sprite_frame_size = {31.f, 42.f};
+    auto [vertices, indices] = gen_sprite_quads(5, glm::vec2(sprite_frame_size.x / sprite_frame_size.y, 1.f), glm::vec2(0.f), glm::vec2(5.f, 1.f) * sprite_frame_size / sprite_size);
+    obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+    obj.sprite_animation = SpriteAnimation{
+        .freeze = false,
+        .last_transit_dt = 0,
+        .curr_frame_idx = 0,
+        .frames = std::vector<SpriteFrame>{
+            { .duration = 0.75, .ebo_offset = 00, .ebo_count = 6, .next_frame_idx = 1 },
+            { .duration = 0.15, .ebo_offset = 12, .ebo_count = 6, .next_frame_idx = 2 },
+            { .duration = 0.15, .ebo_offset = 24, .ebo_count = 6, .next_frame_idx = 3 },
+            { .duration = 0.15, .ebo_offset = 36, .ebo_count = 6, .next_frame_idx = 4 },
+            { .duration = 0.75, .ebo_offset = 48, .ebo_count = 6, .next_frame_idx = 5 },
+            { .duration = 0.15, .ebo_offset = 36, .ebo_count = 6, .next_frame_idx = 6 },
+            { .duration = 0.15, .ebo_offset = 24, .ebo_count = 6, .next_frame_idx = 7 },
+            { .duration = 0.15, .ebo_offset = 12, .ebo_count = 6, .next_frame_idx = 0 },
+        },
+    };
+    return obj;
+}
+
+GameObject create_game_object(const Game& game, glm::ivec3 p, ObjectType block)
+{
+    if (block == ObjectType::BOOK) {
+        return create_book_object(game, p);
+    }
+    else {
+        return create_block_object(game, p, block);
+    }
+}
+
+GameObject create_player_object(const Game& game, glm::ivec3 p)
+{
+    int i = p.x, j = p.y, k = p.z;
+    GameObject obj;
+    obj.transform.scale = glm::vec2(0.7f);
+    obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
+    obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
+    obj.texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-steve.png"));
+    constexpr glm::vec2 sprite_frame_size = {38.f, 72.f};
+    auto [vertices, indices] = gen_sprite_quads(8, glm::vec2(sprite_frame_size.x / sprite_frame_size.y, 1.f), glm::vec2(0.f), glm::vec2(1.f));
+    obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
+    obj.sprite_animation = SpriteAnimation{
+      .freeze = true,
+      .last_transit_dt = 0,
+      .curr_frame_idx = 0,
+      .frames = std::vector<SpriteFrame>{
+        { .duration = -0.10, .ebo_offset = 00, .ebo_count = 6, .next_frame_idx = 0 },
+        { .duration = -0.10, .ebo_offset = 12, .ebo_count = 6, .next_frame_idx = 0 },
+        { .duration = -0.10, .ebo_offset = 24, .ebo_count = 6, .next_frame_idx = 0 },
+        { .duration = -0.10, .ebo_offset = 36, .ebo_count = 6, .next_frame_idx = 0 },
+        { .duration = -0.10, .ebo_offset = 48, .ebo_count = 6, .next_frame_idx = 0 },
+        { .duration = -0.10, .ebo_offset = 60, .ebo_count = 6, .next_frame_idx = 0 },
+        { .duration = -0.10, .ebo_offset = 72, .ebo_count = 6, .next_frame_idx = 0 },
+        { .duration = -0.10, .ebo_offset = 84, .ebo_count = 6, .next_frame_idx = 0 },
+      },
+    };
+    return obj;
+}
 
 /// Load Main Scene
 Scene load_scene(const Game& game)
@@ -482,7 +571,6 @@ Scene load_scene(const Game& game)
     Scene scene;
     scene.bg_color = glm::vec4(glm::vec3(0x2E, 0x3E, 0x69) / glm::vec3(255.f), 1.0f);
 
-    GLTextureRef block_texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-blocks.png"));
 
     auto& platform = scene.platform;
     for (int i = 0; i < (int)game.map->tilemap.size(); i++) {
@@ -491,15 +579,9 @@ Scene load_scene(const Game& game)
             platform[i].resize(game.map->tilemap[i].size());
             for (int k = 0; k < (int)game.map->tilemap[i][j].size(); k++) {
                 platform[i][j].resize(game.map->tilemap[i][j].size());
-                BlockIdx block = game.map->tilemap[i][j][k];
-                if (block == BlockIdx::AIR) continue;
-                auto& obj = platform[i][j][k];
-                auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), blocks_offset.at(block) / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
-                obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
-                obj.texture = block_texture;
-                obj.transform.position.x = i * 0.5f + j * 0.5f - /*canvas offset*/(game.map->tilemap.size() / 2.f);
-                obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f - /*canvas offset*/0.5f;
-                obj.transform.scale = glm::vec2(1.f);
+                ObjectType block = game.map->tilemap[i][j][k];
+                if (block == ObjectType::AIR) continue;
+                platform[i][j][k] = create_game_object(game, {i, j, k}, block);
             }
         }
     }
@@ -507,30 +589,7 @@ Scene load_scene(const Game& game)
     { // Player Steve
         int i = game.map->size.x/2, j = game.map->size.y/2, k = 1;
         scene.player_idx = glm::vec3(i, j, k);
-        auto& obj = platform[i][j][k];
-        obj.transform.scale = glm::vec2(0.7f);
-        obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
-        obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
-        obj.texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-steve.png"));
-        //constexpr glm::vec2 sprite_size = {307.f, 72.f};
-        constexpr glm::vec2 sprite_frame_size = {38.f, 72.f};
-        auto [vertices, indices] = gen_sprite_quads(8, glm::vec2(sprite_frame_size.x / sprite_frame_size.y, 1.f), glm::vec2(0.f), glm::vec2(1.f));
-        obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
-        obj.sprite_animation = SpriteAnimation{
-          .freeze = true,
-          .last_transit_dt = 0,
-          .curr_frame_idx = 0,
-          .frames = std::vector<SpriteFrame>{
-            { .duration = -0.10, .ebo_offset = 00, .ebo_count = 6, .next_frame_idx = 0 },
-            { .duration = -0.10, .ebo_offset = 12, .ebo_count = 6, .next_frame_idx = 0 },
-            { .duration = -0.10, .ebo_offset = 24, .ebo_count = 6, .next_frame_idx = 0 },
-            { .duration = -0.10, .ebo_offset = 36, .ebo_count = 6, .next_frame_idx = 0 },
-            { .duration = -0.10, .ebo_offset = 48, .ebo_count = 6, .next_frame_idx = 0 },
-            { .duration = -0.10, .ebo_offset = 60, .ebo_count = 6, .next_frame_idx = 0 },
-            { .duration = -0.10, .ebo_offset = 72, .ebo_count = 6, .next_frame_idx = 0 },
-            { .duration = -0.10, .ebo_offset = 84, .ebo_count = 6, .next_frame_idx = 0 },
-          },
-        };
+        platform[i][j][k] = create_player_object(game, {i, j, k});
     }
 
 
@@ -551,6 +610,7 @@ int game_init(Game& game, GLFWwindow* window)
     game.canvas_quad_glo = std::make_shared<GLObject>(create_gl_object(quad_vertices.data(), quad_vertices.size(), quad_indices.data(), quad_indices.size()));
     game.white_texture = std::make_shared<GLTexture>(*load_rgba_texture("white.png"));
     game.black_texture = std::make_shared<GLTexture>(*load_rgba_texture("black.png"));
+    game.block_texture = std::make_shared<GLTexture>(*load_rgba_texture("mine-blocks.png"));
     game.camera = Camera::create(game.viewport.aspect_ratio(), 1.f);
     game.map = load_map(game);
     game.scene = load_scene(game);
@@ -584,6 +644,19 @@ void game_update(Game& game, float dt)
             if (obj.texture_slide && obj.texture_offset) {
                 obj.texture_slide->velocity += obj.texture_slide->acceleration * dt;
                 obj.texture_offset->vec += obj.texture_slide->velocity * dt;
+            }
+        }
+    }
+
+
+    for (int i = game.map->size.x-1; i >=0 ; i--) {
+        for (int j = 0; j < (int)game.map->size.y; j++) {
+            for (int k = 0; k < (int)game.map->size.z; k++) {
+                auto* obj = &game.scene->platform[i][j][k];
+                // Sprite Animation system
+                if (obj->sprite_animation) {
+                    obj->sprite_animation->update_frame(dt);
+                }
             }
         }
     }
@@ -856,19 +929,19 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
 
 void key_space_handler(struct Game& game, int key, int action, int mods)
 {
-    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        game.scene->player().motion.velocity.y = 10.f;
-        game.scene->player().entity_state = EntityState::JUMPING;
-        game.scene->player().sprite_animation->freeze = true;
-        game.scene->player().sprite_animation->curr_frame_idx = 2;
-    }
-    else if (action == GLFW_RELEASE) {
-        game.scene->player().motion.velocity.y = 0.0f;
-        game.scene->player().sprite_animation->freeze = true;
-        game.scene->player().sprite_animation->curr_frame_idx = 0;
-        if (game.scene->player().entity_state == EntityState::JUMPING)
-            game.scene->player().entity_state = EntityState::IDLE;
-    }
+    //if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        //game.scene->player().motion.velocity.y = 10.f;
+        //game.scene->player().entity_state = EntityState::JUMPING;
+        //game.scene->player().sprite_animation->freeze = true;
+        //game.scene->player().sprite_animation->curr_frame_idx = 2;
+    //}
+    //else if (action == GLFW_RELEASE) {
+        //game.scene->player().motion.velocity.y = 0.0f;
+        //game.scene->player().sprite_animation->freeze = true;
+        //game.scene->player().sprite_animation->curr_frame_idx = 0;
+        //if (game.scene->player().entity_state == EntityState::JUMPING)
+            //game.scene->player().entity_state = EntityState::IDLE;
+    //}
 }
 
 void key_f5_handler(struct Game& game, int key, int action, int mods)
@@ -929,26 +1002,20 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         if (game->scene->highlight_idx) {
             glm::uvec3 s = *game->scene->highlight_idx;
             glm::uvec3 v = s; v.z += 1;
-            auto& block_above = game->map->tilemap[v.x][v.y][v.z];
-            if (block_above == BlockIdx::AIR) {
-                block_above = BlockIdx::STONE;
-                auto& obj = game->scene->platform[v.x][v.y][v.z];
-                auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), blocks_offset.at(block_above) / blocks_tileset_size, blocks_tile_size / blocks_tileset_size);
-                obj.glo = std::make_shared<GLObject>(create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size()));
-                obj.texture = game->scene->platform[s.x][s.y][s.z].texture;
-                obj.transform.position.x = v.x * 0.5f + v.y * 0.5f - (game->map->tilemap.size() / 2.f);
-                obj.transform.position.y = v.x * 0.25f - v.y * 0.25f + v.z * 0.5f - 0.5f;
-                obj.transform.scale = glm::vec2(1.f);
+            if (v != game->scene->player_idx) {
+                auto& block_above = game->map->tilemap[v.x][v.y][v.z];
+                if (block_above == ObjectType::AIR) {
+                    block_above = ObjectType::STONE;
+                    game->scene->platform[v.x][v.y][v.z] = create_game_object(*game, v, block_above);
+                }
             }
         }
-
     }
-
-    if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
+    else if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
         if (game->scene->highlight_idx) {
             glm::uvec3 v = *game->scene->highlight_idx;
             if (v.z != 0) {
-                game->map->tilemap[v.x][v.y][v.z] = BlockIdx::AIR;
+                game->map->tilemap[v.x][v.y][v.z] = ObjectType::AIR;
                 game->scene->platform[v.x][v.y][v.z].highlight = std::nullopt;
                 auto& obj = game->scene->platform[v.x][v.y][v.z];
                 obj.glo = nullptr;
@@ -959,23 +1026,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         }
     }
 }
-
-//float area(glm::vec2 a, glm::vec2 b, glm::vec2 c)
-//{
-    //return std::abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2.f;
-//}
-
-//// input in canvas position
-//bool collides(glm::vec2 cursor_pos, glm::vec2 target_pos)
-//{
-    //float h[>height_normal<] = tile_surface_height / blocks_tile_size.y;
-    //glm::vec2 A = {target_pos.x + 0.0f, target_pos.y + (1.f - h) + 0.5f * h};
-    //glm::vec2 B = {target_pos.x + 0.5f, target_pos.y + (1.f - h) + 0.0f * h};
-    //glm::vec2 C = {target_pos.x + 1.0f, target_pos.y + (1.f - h) + 0.5f * h};
-    //glm::vec2 D = {target_pos.x + 0.5f, target_pos.y + (1.f - h) + 1.0f * h};
-    //auto p = cursor_pos;
-    //return area(A, B, D) == area(A, p, B) + area(p, B, D) + area(A, p, D);
-//}
 
 /// Handle cursor movement events
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
@@ -998,8 +1048,6 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
 
     glm::ivec3 mapsize = game->map->size;
     if (i >= 0 && i < mapsize.x && j >= 0 && j < mapsize.y && k >= 0 && k < mapsize.z) {
-        //bool ret = collides(canvas_pos, game->scene->platform[i][j][k].transform.position);
-        //printf("collides %d with i %f j %f k %f\n", ret, i, j, k);
 
         // check other k layers
         for (int n = mapsize.z-1; n > 0; n--) {
@@ -1007,7 +1055,7 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
             if (p.x < 0 || p.y >= mapsize.y || p.z >= mapsize.z)
                 continue;
             auto& block = game->map->tilemap[p.x][p.y][p.z];
-            if (block != BlockIdx::AIR) {
+            if (block != ObjectType::AIR) {
                 i = p.x;
                 j = p.y;
                 k = p.z;
@@ -1021,12 +1069,6 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
         game->scene->platform[i][j][k].highlight = Highlight{};
         game->scene->highlight_idx = {i, j, k};
     }
-
-
-    // check for k level:
-    // i -= 1, j
-    // i =, j += 1
-    // i -= 1, j +=1
 }
 
 /// Handle Scrool wheel events
