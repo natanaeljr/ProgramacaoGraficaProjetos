@@ -221,8 +221,8 @@ auto load_rgba_texture(const std::string& inpath) -> std::optional<GLTexture>
     GLuint texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
     glTexImage2D(GL_TEXTURE_2D, 0, type, width, height, 0, type, GL_UNSIGNED_BYTE, data);
@@ -333,6 +333,11 @@ using KeyStateMap = std::unordered_map<Key, bool>;
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Game
 
+enum class GameMode {
+    COLLECT_BOOKS,
+    CREATIVE,
+};
+
 /// Game Object represents an Entity's data
 struct GameObject {
     Transform transform;
@@ -351,6 +356,7 @@ enum ObjectType {
     WOOD,
     WOODPLANK,
     BOOK,
+    COUNT,
 };
 
 struct Map {
@@ -370,6 +376,7 @@ struct Scene {
 /// All Game data
 struct Game {
     bool over;
+    GameMode mode;
     Window window;
     Viewport viewport;
     glm::vec2 cursor;
@@ -386,6 +393,8 @@ struct Game {
     std::vector<TimedAction> timed_actions;
     int books_collected_count;
     bool debug_triangles;
+    ObjectType target_objtype;
+    GameObject target_obj;
 };
 
 /// Load entire map
@@ -406,10 +415,12 @@ Map load_map(const Game& game)
     };
 
     for (int i = 0; i < (int)map.tilemap.size(); i++) {
-      for (int j = 0; j < (int)map.tilemap[i].size(); j++) {
-        int index = std::rand() % sizeof(ground_blocks) / sizeof(ground_blocks[0]);
-        map.tilemap[i][j][0] = ground_blocks[index];
-      }
+        for (int j = 0; j < (int)map.tilemap[i].size(); j++) {
+            int index = 0;
+            if (game.mode == GameMode::COLLECT_BOOKS)
+                index = std::rand() % sizeof(ground_blocks) / sizeof(ground_blocks[0]);
+            map.tilemap[i][j][0] = ground_blocks[index];
+        }
     }
 
     //size_t i = 5;
@@ -424,15 +435,17 @@ Map load_map(const Game& game)
     //map.tilemap[i-1][j+1][3] = ObjectType::WOODPLANK;
     //map.tilemap[i-1][j][3] = ObjectType::WOODPLANK;
 
-    // spawn books
-    for (int x = 0; x < 10; x++) {
-        int i = std::rand() % map.size.x;
-        int j = std::rand() % map.size.y;
-        if (map.tilemap[i][j][1] == ObjectType::BOOK) {
-            x--;
-            continue;
+    if (game.mode == GameMode::COLLECT_BOOKS) {
+        // spawn books
+        for (int x = 0; x < 10; x++) {
+            int i = std::rand() % map.size.x;
+            int j = std::rand() % map.size.y;
+            if (map.tilemap[i][j][1] == ObjectType::BOOK) {
+                x--;
+                continue;
+            }
+            map.tilemap[i][j][1] = ObjectType::BOOK;
         }
-        map.tilemap[i][j][1] = ObjectType::BOOK;
     }
 
     return map;
@@ -592,6 +605,7 @@ int game_init(Game& game, GLFWwindow* window)
 {
     std::srand(std::time(nullptr));
     game.over = false;
+    game.mode = GameMode::COLLECT_BOOKS;
     game.window.glfw = window;
     game.window.size = glm::uvec2(WIDTH, HEIGHT);
     game.viewport.size = glm::uvec2(WIDTH, HEIGHT);
@@ -610,18 +624,26 @@ int game_init(Game& game, GLFWwindow* window)
     game.key_states = KeyStateMap(GLFW_KEY_LAST);
     game.books_collected_count = 0;
     game.debug_triangles = false;
+    game.target_objtype = ObjectType::STONE;
+    game.target_obj = create_block_object(game, glm::ivec3(0), ObjectType::STONE);
+    game.target_obj.transform.position = -game.camera->canvas_size / 2.f + glm::vec3(0.5f);
 
     game.timed_actions = {};
     game.timed_actions.push_back(TimedAction{
         .tick_dt = 0,
         .duration = 0.4,
-        .action = drop_tile_block,
+        .action =
+            [](Game &game, auto &&...args) {
+              if (game.mode != GameMode::COLLECT_BOOKS) return;
+              drop_tile_block(game, args...);
+            },
     });
     game.timed_actions.push_back(TimedAction{
         .tick_dt = 0,
         .duration = 3,
         .action =
             [](Game &game, auto &&...) {
+                if (game.mode != GameMode::COLLECT_BOOKS) return;
                 if (game.books_collected_count == 10) {
                     std::cout << "YOU WIN" << std::endl;
                     game.over = true;
@@ -638,14 +660,17 @@ int game_init(Game& game, GLFWwindow* window)
     return 0;
 }
 
-void game_restart(Game& game)
+void game_restart(Game& game, GameMode mode)
 {
     game.over = false;
+    game.mode = mode;
     game.map = load_map(game);
     game.scene = load_scene(game);
     game.books_collected_count = 0;
 
-    std::cout << "GAME RESTART" << std::endl;
+    std::cout << "GAME RESTART: Mode "
+        << (mode == GameMode::CREATIVE ? "CREATIVE" : "COLLECT_BOOKS")
+        << std::endl;
 }
 
 /// Game tick update
@@ -678,6 +703,9 @@ void game_update(Game& game, float dt, float time)
             }
         }
     }
+
+    if (game.target_obj.sprite_animation)
+        game.target_obj.sprite_animation->update_frame(dt);
 }
 
 /// Prepare to render
@@ -792,6 +820,12 @@ void game_render(Game& game)
         }
     }
 
+    if (game.mode == GameMode::CREATIVE) {
+        GameObject& obj = game.target_obj;
+        auto sprite = obj.sprite_animation ? std::make_optional<SpriteFrame>(obj.sprite_animation->curr_frame()) : std::nullopt;
+        draw_object(shader, *obj.texture, *obj.glo, obj.transform.matrix(), sprite);
+    }
+
     if (game.debug_triangles)
         render_surface(game, shader);
 }
@@ -829,13 +863,13 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
             int i = game.scene->player_idx.x + 1, j = game.scene->player_idx.y, k = game.scene->player_idx.z;
             game.scene->platform[i-1][j][k].sprite_animation->curr_frame_idx = 3;
             if (i < (int)game.map->size.x ) {
-                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || (game.mode == GameMode::COLLECT_BOOKS && game.map->tilemap[i][j][k] == ObjectType::BOOK)) {
                     game.scene->player_idx.x = i;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i-1][j][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
                     obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
                     if (game.scene->platform[i][j][0].gravity) { obj.gravity = Gravity{}; }
-                    if (game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                    if (game.mode == GameMode::COLLECT_BOOKS && game.map->tilemap[i][j][k] == ObjectType::BOOK) {
                         game.map->tilemap[i][j][k] = ObjectType::AIR;
                         game.books_collected_count++;
                     }
@@ -846,13 +880,13 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
             int i = game.scene->player_idx.x - 1, j = game.scene->player_idx.y, k = game.scene->player_idx.z;
             game.scene->platform[i+1][j][k].sprite_animation->curr_frame_idx = 1;
             if (i >= 0) {
-                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || (game.mode == GameMode::COLLECT_BOOKS && game.map->tilemap[i][j][k] == ObjectType::BOOK)) {
                     game.scene->player_idx.x = i;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i+1][j][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
                     obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
                     if (game.scene->platform[i][j][0].gravity) { obj.gravity = Gravity{}; }
-                    if (game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                    if (game.mode == GameMode::COLLECT_BOOKS && game.map->tilemap[i][j][k] == ObjectType::BOOK) {
                         game.map->tilemap[i][j][k] = ObjectType::AIR;
                         game.books_collected_count++;
                     }
@@ -863,13 +897,13 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
             int i = game.scene->player_idx.x, j = game.scene->player_idx.y + 1, k = game.scene->player_idx.z;
             game.scene->platform[i][j-1][k].sprite_animation->curr_frame_idx = 0;
             if (j < (int)game.map->size.y) {
-                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || (game.mode == GameMode::COLLECT_BOOKS && game.map->tilemap[i][j][k] == ObjectType::BOOK)) {
                     game.scene->player_idx.y = j;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j-1][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
                     obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
                     if (game.scene->platform[i][j][0].gravity) { obj.gravity = Gravity{}; }
-                    if (game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                    if (game.mode == GameMode::COLLECT_BOOKS && game.map->tilemap[i][j][k] == ObjectType::BOOK) {
                         game.map->tilemap[i][j][k] = ObjectType::AIR;
                         game.books_collected_count++;
                     }
@@ -880,13 +914,13 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
             int i = game.scene->player_idx.x, j = game.scene->player_idx.y - 1, k = game.scene->player_idx.z;
             game.scene->platform[i][j+1][k].sprite_animation->curr_frame_idx = 2;
             if (j >= 0) {
-                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                if ((!game.scene->platform[i][j][k].glo && !game.scene->platform[i][j][k+1].glo) || (game.mode == GameMode::COLLECT_BOOKS && game.map->tilemap[i][j][k] == ObjectType::BOOK)) {
                     game.scene->player_idx.y = j;
                     auto& obj = game.scene->platform[i][j][k] = std::move(game.scene->platform[i][j+1][k]);
                     obj.transform.position.x = i * 0.5f + j * 0.5f - (game.map->tilemap.size() / 2.f) + 0.5f;
                     obj.transform.position.y = i * 0.25f - j * 0.25f + k * 0.5f + 0.3f;
                     if (game.scene->platform[i][j][0].gravity) { obj.gravity = Gravity{}; }
-                    if (game.map->tilemap[i][j][k] == ObjectType::BOOK) {
+                    if (game.mode == GameMode::COLLECT_BOOKS && game.map->tilemap[i][j][k] == ObjectType::BOOK) {
                         game.map->tilemap[i][j][k] = ObjectType::AIR;
                         game.books_collected_count++;
                     }
@@ -894,6 +928,21 @@ void key_arrows_handler(struct Game& game, int key, int action, int mods)
             }
         }
     }
+}
+
+void key_space_handler(struct Game& game, int key, int action, int mods)
+{
+    if (game.mode != GameMode::CREATIVE) return;
+    if (action != GLFW_PRESS) return;
+
+    ((int&)(game.target_objtype))++;
+
+    if (game.target_objtype == ObjectType::COUNT) {
+        game.target_objtype = (ObjectType)((int)ObjectType::AIR + 1);
+    }
+
+    game.target_obj = create_game_object(game, glm::vec3(0), game.target_objtype);
+    game.target_obj.transform.position = -game.camera->canvas_size / 2.f + glm::vec3(0.5f);
 }
 
 void key_f5_handler(struct Game& game, int key, int action, int mods)
@@ -912,13 +961,24 @@ void key_event_callback(GLFWwindow* window, int key, int scancode, int action, i
         glfwSetWindowShouldClose(game->window.glfw, 1);
     }
     else if (key == GLFW_KEY_R && action == GLFW_PRESS) {
-        game_restart(*game);
+        game_restart(*game, game->mode);
+    }
+    else if (key == GLFW_KEY_C && action == GLFW_PRESS) {
+        if (game->mode != GameMode::CREATIVE)
+            game_restart(*game, GameMode::CREATIVE);
+    }
+    else if (key == GLFW_KEY_B && action == GLFW_PRESS) {
+        if (game->mode != GameMode::COLLECT_BOOKS)
+            game_restart(*game, GameMode::COLLECT_BOOKS);
     }
 
     if (game->over) return;
 
     if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT || key == GLFW_KEY_UP || key == GLFW_KEY_DOWN) {
         key_arrows_handler(*game, key, action, mods);
+    }
+    else if (key == GLFW_KEY_SPACE) {
+        key_space_handler(*game, key, action, mods);
     }
     else if (key == GLFW_KEY_F5) {
         key_f5_handler(*game, key, action, mods);
@@ -935,6 +995,8 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
 
+    if (game->mode != GameMode::CREATIVE) return;
+
     if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_RIGHT) {
         if (game->scene->highlight_idx) {
             glm::uvec3 s = *game->scene->highlight_idx;
@@ -942,7 +1004,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             if (v != game->scene->player_idx) {
                 auto& block_above = game->map->tilemap[v.x][v.y][v.z];
                 if (block_above == ObjectType::AIR) {
-                    block_above = ObjectType::STONE;
+                    block_above = game->target_objtype;
                     game->scene->platform[v.x][v.y][v.z] = create_game_object(*game, v, block_above);
                 }
             }
@@ -970,6 +1032,8 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
     auto game = static_cast<Game*>(glfwGetWindowUserPointer(window));
     if (!game) return;
     game->cursor = {xpos, ypos};
+
+    if (game->mode != GameMode::CREATIVE) return;
 
     ypos = game->window.size.y - ypos;
     glm::vec2 cursor_pos{xpos, ypos};
