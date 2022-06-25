@@ -272,35 +272,6 @@ struct Camera {
     }
 };
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Collision
-
-/// Axis-aligned Bounding Box component
-/// in respect to the object's local space
-/// (no rotation support)
-///     +---+ max
-///     | x |
-/// min +---+    x = center = origin = transform.position
-struct Aabb {
-  glm::vec2 min {-1.0f};
-  glm::vec2 max {+1.0f};
-
-  Aabb transform(const glm::mat4& matrix) const {
-    glm::vec2 a = matrix * glm::vec4(min, 0.0f, 1.0f);
-    glm::vec2 b = matrix * glm::vec4(max, 0.0f, 1.0f);
-    return Aabb{glm::min(a, b), glm::max(a, b)};
-  }
-};
-
-/// Check for collision between two AABBs
-bool collision(const Aabb& a, const Aabb& b)
-{
-  return a.min.x < b.max.x &&
-         a.max.x > b.min.x &&
-         a.min.y < b.max.y &&
-         a.max.y > b.min.y;
-}
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 /// Components
 
@@ -376,7 +347,6 @@ struct GameObject {
     std::optional<SpriteAnimation> sprite_animation;
     std::optional<EntityState> entity_state;
     std::optional<Gravity> gravity;
-    std::optional<Aabb> aabb;
     std::optional<Highlight> highlight;
 };
 
@@ -394,21 +364,12 @@ struct Map {
     std::vector<std::vector<std::vector<ObjectType>>> tilemap;
 };
 
-/// Lists of all Game Objects in a Scene, divised in layers, in order of render
-struct ObjectLists {
-    std::vector<GameObject> entity;
-    /// Get all layers of objects
-    auto all_lists() { return std::array{ &entity }; }
-};
-
 /// Generic Scene structure
 struct Scene {
-    ObjectLists objects;
     glm::vec4 bg_color;
     std::vector<std::vector<std::vector<GameObject>>> platform;
     glm::uvec3 player_idx;
     std::optional<glm::uvec3> highlight_idx;
-    GameObject& player() { return objects.entity.front(); }
 };
 
 /// All Game data
@@ -444,10 +405,6 @@ Map load_map(const Game& game)
         }
     }
 
-    // Add some randomness to the map
-    std::srand(time(nullptr));
-    //size_t i = std::rand() % 21;
-    //size_t j = std::rand() % 21;
     size_t i = 5;
     size_t j = 8;
     map.tilemap[i][j][1] = ObjectType::STONE;
@@ -457,17 +414,11 @@ Map load_map(const Game& game)
     map.tilemap[i][j+1][1] = ObjectType::STONE;
     map.tilemap[i][j+1][2] = ObjectType::STONE;
     map.tilemap[i][j+1][3] = ObjectType::STONE;
-    //map.tilemap[i-1][j+1][1] = BlockIdx::WOODPLANK;
-    //map.tilemap[i-1][j+1][2] = BlockIdx::WOODPLANK;
     map.tilemap[i-1][j+1][3] = ObjectType::WOODPLANK;
-    //map.tilemap[i-1][j][1] = BlockIdx::WOODPLANK;
-    //map.tilemap[i-1][j][2] = BlockIdx::WOODPLANK;
     map.tilemap[i-1][j][3] = ObjectType::WOODPLANK;
 
-    {
-        int i = map.size.x/2, j = map.size.y/2+1, k = 1;
-        map.tilemap[i][j][k] = ObjectType::BOOK;
-    }
+    i = map.size.x/2, j = map.size.y/2+1;
+    map.tilemap[i][j][1] = ObjectType::BOOK;
 
     return map;
 }
@@ -571,7 +522,6 @@ Scene load_scene(const Game& game)
     Scene scene;
     scene.bg_color = glm::vec4(glm::vec3(0x2E, 0x3E, 0x69) / glm::vec3(255.f), 1.0f);
 
-
     auto& platform = scene.platform;
     for (int i = 0; i < (int)game.map->tilemap.size(); i++) {
         platform.resize(game.map->tilemap.size());
@@ -591,7 +541,6 @@ Scene load_scene(const Game& game)
         scene.player_idx = glm::vec3(i, j, k);
         platform[i][j][k] = create_player_object(game, {i, j, k});
     }
-
 
     return scene;
 }
@@ -625,37 +574,26 @@ int game_init(Game& game, GLFWwindow* window)
 /// Game tick update
 void game_update(Game& game, float dt)
 {
-    // Update all objects
-    for (auto* object_list : game.scene->objects.all_lists()) {
-        for (auto& obj : *object_list) {
-            // Gravity system
-            if (obj.gravity && (!obj.entity_state || obj.entity_state != EntityState::JUMPING)) {
-                constexpr float kGravityFactor = 20.f;
-                obj.motion.acceleration.y = -kGravityFactor;
-            }
-            // Motion system
-            obj.motion.velocity += obj.motion.acceleration * dt;
-            obj.transform.position += obj.motion.velocity * dt;
-            // Sprite Animation system
-            if (obj.sprite_animation) {
-                obj.sprite_animation->update_frame(dt);
-            }
-            // Texture Sliding system
-            if (obj.texture_slide && obj.texture_offset) {
-                obj.texture_slide->velocity += obj.texture_slide->acceleration * dt;
-                obj.texture_offset->vec += obj.texture_slide->velocity * dt;
-            }
-        }
-    }
-
-
     for (int i = game.map->size.x-1; i >=0 ; i--) {
         for (int j = 0; j < (int)game.map->size.y; j++) {
             for (int k = 0; k < (int)game.map->size.z; k++) {
                 auto* obj = &game.scene->platform[i][j][k];
+                // Gravity system
+                if (obj->gravity && (!obj->entity_state || obj->entity_state != EntityState::JUMPING)) {
+                    constexpr float kGravityFactor = 20.f;
+                    obj->motion.acceleration.y = -kGravityFactor;
+                }
+                // Motion system
+                obj->motion.velocity += obj->motion.acceleration * dt;
+                obj->transform.position += obj->motion.velocity * dt;
                 // Sprite Animation system
                 if (obj->sprite_animation) {
                     obj->sprite_animation->update_frame(dt);
+                }
+                // Texture Sliding system
+                if (obj->texture_slide && obj->texture_offset) {
+                    obj->texture_slide->velocity += obj->texture_slide->acceleration * dt;
+                    obj->texture_offset->vec += obj->texture_slide->velocity * dt;
                 }
             }
         }
@@ -713,34 +651,6 @@ void render_grid(Game& game, GLuint shader)
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
-/// Render AABBs for all objects that have it
-void render_aabbs(Game& game, GLuint shader)
-{
-    glLineWidth(1.0f);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-    auto [vertices, indices] = gen_quad_geometry(glm::vec2(1.f), glm::vec2(0.f), glm::vec2(1.0f));
-    GLObject glo = create_gl_object(vertices.data(), vertices.size(), indices.data(), indices.size(), GL_STREAM_DRAW);
-    glBindVertexArray(glo.vao);
-    for (auto* object_list : game.scene->objects.all_lists()) {
-        for (auto obj = object_list->rbegin(); obj != object_list->rend(); obj++) {
-            if (obj->aabb) {
-                Aabb& aabb = *obj->aabb;
-                auto vertices = std::vector<Vertex>{
-                    { .pos = { aabb.min.x, aabb.min.y }, .texcoord = { 1.0f, 0.0f } },
-                    { .pos = { aabb.min.x, aabb.max.y }, .texcoord = { 1.0f, 1.0f } },
-                    { .pos = { aabb.max.x, aabb.min.y }, .texcoord = { 0.0f, 1.0f } },
-                    { .pos = { aabb.max.x, aabb.max.y }, .texcoord = { 0.0f, 0.0f } },
-                };
-                //glBindVertexArray(bbox_glo.vao);
-                glBindBuffer(GL_ARRAY_BUFFER, glo.vbo);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
-                draw_object(shader, *game.white_texture, glo, obj->transform.matrix(), std::nullopt, std::nullopt);
-            }
-        }
-    }
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-}
-
 /// Render triangles for all objects
 void render_triangles(Game& game, GLuint shader)
 {
@@ -756,14 +666,6 @@ void render_triangles(Game& game, GLuint shader)
                     draw_object(shader, *game.black_texture, *obj->glo, transform.matrix(), std::nullopt, std::nullopt);
                 }
             }
-        }
-    }
-
-    for (auto* object_list : game.scene->objects.all_lists()) {
-        for (auto obj = object_list->rbegin(); obj != object_list->rend(); obj++) {
-            glBindVertexArray(obj->glo->vao);
-            Transform transform = obj->transform;
-            draw_object(shader, *game.black_texture, *obj->glo, transform.matrix(), std::nullopt, std::nullopt);
         }
     }
 
@@ -829,18 +731,6 @@ void game_render(Game& game)
             }
         }
     }
-
-    for (auto* object_list : game.scene->objects.all_lists()) {
-        for (auto obj = object_list->begin(); obj != object_list->end(); obj++) {
-            if (obj->glo && obj->texture) {
-                auto sprite = obj->sprite_animation ? std::make_optional<SpriteFrame>(obj->sprite_animation->curr_frame()) : std::nullopt;
-                draw_object(shader, *obj->texture, *obj->glo, obj->transform.matrix(), obj->texture_offset, sprite);
-            }
-        }
-    }
-
-    if (game.debug_aabb)
-        render_aabbs(game, shader);
 
     if (game.debug_grid)
         render_grid(game, shader);
